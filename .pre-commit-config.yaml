@@ -1,0 +1,68 @@
+# Pre-commit configuration for Mimikos
+# See https://pre-commit.com for more information
+
+repos:
+  # General file checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '\.md$'
+      - id: end-of-file-fixer
+        exclude: '\.md$'
+      - id: check-yaml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: detect-private-key
+      - id: check-case-conflict
+
+  # Go-specific hooks
+  - repo: local
+    hooks:
+      - id: go-fmt
+        name: go fmt
+        entry: golangci-lint fmt
+        language: system
+        pass_filenames: false
+        types: [go]
+      - id: go-mod-tidy
+        name: go mod tidy
+        entry: go mod tidy
+        language: system
+        pass_filenames: false
+        files: 'go\.(mod|sum)$'
+      - id: go-vet
+        name: go vet
+        entry: go vet ./...
+        language: system
+        pass_filenames: false
+        types: [go]
+      - id: go-unit-tests
+        name: go unit tests
+        entry: go test -short ./...
+        language: system
+        pass_filenames: false
+        types: [go]
+
+  # golangci-lint
+  - repo: local
+    hooks:
+      - id: golangci-lint
+        name: golangci-lint
+        entry: golangci-lint run
+        language: system
+        types: [go]
+        pass_filenames: false
+
+# Configuration
+default_stages: [pre-commit]
+fail_fast: false
+
+# Exclude patterns
+exclude: |
+  (?x)^(
+    notes/.*\.md$|
+    testdata/
+  )$

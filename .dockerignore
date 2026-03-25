@@ -1,0 +1,37 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+README.md
+
+# Development
+.env
+.env.local
+.vscode/
+.idea/
+.claude/
+
+# Dependencies
+vendor/
+
+# Build artifacts
+bin/
+build/
+*.exe
+*.so
+*.dylib
+
+# Test files
+*_test.go
+coverage.out
+
+# Temporary files
+*.tmp
+*.log
+.DS_Store
+
+# Project-specific exclusions
+notes/
+spike/
+testdata/
