@@ -1,0 +1,58 @@
+# golangci-lint configuration for Mimikos
+# Based on official documentation: https://golangci-lint.run/docs/configuration/file/
+
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  go: '1.25'
+  concurrency: 4
+
+linters:
+  default: all
+
+  disable:
+    - depguard
+    - exhaustruct
+    - godox
+    - varnamelen
+    - wrapcheck
+    - testpackage
+    - paralleltest
+    - tparallel
+    - noinlineerr
+    - forbidigo     # CLI tool — fmt.Print* is legitimate for user output
+    - wsl           # Deprecated, replaced by wsl_v5
+
+  settings:
+    cyclop:
+      max-complexity: 15
+
+    funlen:
+      lines: 100
+      statements: 50
+
+    gocognit:
+      min-complexity: 20
+
+  # Exclusion rules to disable complexity linters for test files
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - cyclop
+          - funlen
+          - gocognit
+          - gocyclo
+          - maintidx
+          - errcheck
+          - dupl
+          - gosec
+          - intrange
+          - noinlineerr
+          - goconst
+
+issues:
+  max-issues-per-linter: 20
+  max-same-issues: 5

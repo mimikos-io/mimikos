@@ -1,0 +1,26 @@
+{
+  "name": "Mimikos Dev Container",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+
+  "runArgs": [
+    "--name", "mimikos-dev-container"
+  ],
+
+  "containerEnv": {
+    "GO_VERSION": "1.25.0",
+    "CGO_ENABLED": "0"
+  },
+
+  "remoteUser": "mimikos",
+  "updateRemoteUserUID": false,
+
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+
+  "postCreateCommand": "go mod download && pre-commit install",
+
+  "shutdownAction": "stopContainer"
+}
