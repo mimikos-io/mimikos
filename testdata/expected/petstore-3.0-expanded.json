@@ -1,0 +1,11 @@
+{
+  "spec": "petstore-3.0-expanded.yaml",
+  "source": "OAI/OpenAPI-Specification (expanded example)",
+  "total_operations": 4,
+  "classifications": {
+    "GET /pets": "list",
+    "POST /pets": "create",
+    "GET /pets/{id}": "fetch",
+    "DELETE /pets/{id}": "delete"
+  }
+}

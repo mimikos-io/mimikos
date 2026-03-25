@@ -1,0 +1,12 @@
+{
+  "spec": "petstore-3.1.yaml",
+  "source": "Synthetic (Mimikos spike, tests 3.1 features)",
+  "total_operations": 5,
+  "classifications": {
+    "GET /pets": "list",
+    "POST /pets": "create",
+    "GET /pets/{petId}": "fetch",
+    "DELETE /pets/{petId}": "delete",
+    "PATCH /pets/{petId}": "update"
+  }
+}

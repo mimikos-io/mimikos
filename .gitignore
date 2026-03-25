@@ -18,7 +18,7 @@ coverage.*
 profile.cov
 
 # Dependency directories (remove the comment below to include it)
-# vendor/
+vendor/
 
 # Go workspace file
 go.work
@@ -28,5 +28,21 @@ go.work.sum
 .env
 
 # Editor/IDE
-# .idea/
-# .vscode/
+.idea/
+.vscode/
+
+# claude
+.claude/
+CLAUDE.md
+
+# mimikos-notes
+notes
+
+# Spike (throwaway code)
+spike/
+
+# Large spec files (downloaded at spike time, >1MB)
+testdata/specs/stripe.yaml
+testdata/specs/github.yaml
+testdata/specs/twilio-api-v2010.yaml
+testdata/specs/sendgrid.yaml
