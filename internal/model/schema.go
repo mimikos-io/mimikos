@@ -1,12 +1,10 @@
 package model
 
-// CompiledSchema is a placeholder wrapper for a pre-compiled JSON schema.
-// In Session 10 (Task 6.4), this will wrap santhosh-tekuri/jsonschema
-// compiled schemas for request/response validation.
-//
-// For now, it serves as the type contract that other packages depend on,
-// allowing the parser and classifier to reference schema types without
-// the full compilation implementation.
+import "github.com/santhosh-tekuri/jsonschema/v6"
+
+// CompiledSchema wraps a pre-compiled JSON Schema validator for
+// request/response validation. Produced by the Schema Compiler (Task 6.4)
+// from OpenAPI schemas parsed by the Spec Parser.
 type CompiledSchema struct {
 	// Name is a human-readable identifier for the schema (e.g., "Pet", "Error").
 	Name string
@@ -14,4 +12,20 @@ type CompiledSchema struct {
 	// IsCircular indicates that this schema contains circular references
 	// and must be bounded during data generation.
 	IsCircular bool
+
+	// Schema is the compiled JSON Schema validator from santhosh-tekuri/jsonschema.
+	// Used for validating JSON documents against the schema.
+	Schema *jsonschema.Schema
+}
+
+// Validate validates a JSON document against the compiled schema.
+// The value should be the result of json.Unmarshal into any (map[string]any,
+// []any, string, float64, bool, or nil).
+// Nil-safe: returns nil if the receiver or the underlying schema is nil.
+func (cs *CompiledSchema) Validate(value any) error {
+	if cs == nil || cs.Schema == nil {
+		return nil
+	}
+
+	return cs.Schema.Validate(value)
 }

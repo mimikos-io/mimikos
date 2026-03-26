@@ -185,11 +185,14 @@ func (p *LibopenAPIParser) extractOperations(
 				Tags:        v3Op.Tags,
 			}
 
+			// Build JSON pointer prefix for this operation's schemas.
+			opPointer := "#/paths/" + encodeJSONPointerToken(path) + "/" + opPair.Key
+
 			// Extract request body.
-			op.RequestBody = p.extractRequestBody(v3Op, circularSet)
+			op.RequestBody = p.extractRequestBody(v3Op, circularSet, opPointer)
 
 			// Extract responses.
-			op.Responses, op.DefaultResponse = p.extractResponses(v3Op, circularSet)
+			op.Responses, op.DefaultResponse = p.extractResponses(v3Op, circularSet, opPointer)
 
 			operations = append(operations, op)
 		}
@@ -200,29 +203,30 @@ func (p *LibopenAPIParser) extractOperations(
 
 // extractRequestBody extracts the JSON request body schema from an operation.
 func (p *LibopenAPIParser) extractRequestBody(
-	op *v3high.Operation, circularSet map[string]bool,
+	op *v3high.Operation, circularSet map[string]bool, pathPointer string,
 ) *RequestBody {
 	if op.RequestBody == nil || op.RequestBody.Content == nil {
 		return nil
 	}
 
-	schemaProxy := findJSONMediaTypeSchema(op.RequestBody.Content)
+	schemaProxy, contentType := findJSONMediaTypeSchema(op.RequestBody.Content)
 	if schemaProxy == nil {
 		return nil
 	}
 
 	required := op.RequestBody.Required != nil && *op.RequestBody.Required
+	inlinePointer := pathPointer + "/requestBody/content/" + encodeJSONPointerToken(contentType) + "/schema"
 
 	return &RequestBody{
 		Required: required,
-		Schema:   p.resolveSchemaRef(schemaProxy, circularSet),
+		Schema:   p.resolveSchemaRef(schemaProxy, circularSet, inlinePointer),
 	}
 }
 
 // extractResponses extracts JSON response schemas keyed by status code,
 // plus the default response if present.
 func (p *LibopenAPIParser) extractResponses(
-	op *v3high.Operation, circularSet map[string]bool,
+	op *v3high.Operation, circularSet map[string]bool, pathPointer string,
 ) (map[int]*Response, *Response) {
 	if op.Responses == nil {
 		return nil, nil
@@ -251,8 +255,11 @@ func (p *LibopenAPIParser) extractResponses(
 			}
 
 			if v3Resp.Content != nil {
-				if schemaProxy := findJSONMediaTypeSchema(v3Resp.Content); schemaProxy != nil {
-					resp.Schema = p.resolveSchemaRef(schemaProxy, circularSet)
+				schemaProxy, contentType := findJSONMediaTypeSchema(v3Resp.Content)
+				if schemaProxy != nil {
+					inlinePointer := pathPointer + "/responses/" + codePair.Key +
+						"/content/" + encodeJSONPointerToken(contentType) + "/schema"
+					resp.Schema = p.resolveSchemaRef(schemaProxy, circularSet, inlinePointer)
 				}
 			}
 
@@ -271,8 +278,11 @@ func (p *LibopenAPIParser) extractResponses(
 		}
 
 		if v3Default.Content != nil {
-			if schemaProxy := findJSONMediaTypeSchema(v3Default.Content); schemaProxy != nil {
-				defaultResp.Schema = p.resolveSchemaRef(schemaProxy, circularSet)
+			schemaProxy, contentType := findJSONMediaTypeSchema(v3Default.Content)
+			if schemaProxy != nil {
+				inlinePointer := pathPointer + "/responses/default/content/" +
+					encodeJSONPointerToken(contentType) + "/schema"
+				defaultResp.Schema = p.resolveSchemaRef(schemaProxy, circularSet, inlinePointer)
 			}
 		}
 	}
@@ -280,10 +290,14 @@ func (p *LibopenAPIParser) extractResponses(
 	return responses, defaultResp
 }
 
-// resolveSchemaRef resolves a SchemaProxy into a SchemaRef with name and
-// circular reference annotation.
+// resolveSchemaRef resolves a SchemaProxy into a SchemaRef with name,
+// circular reference annotation, and JSON pointer for the Schema Compiler.
+//
+// The inlinePointer is the JSON pointer to the schema's location in the spec
+// (used for inline schemas). For $ref schemas, the pointer is derived from
+// the reference target instead.
 func (p *LibopenAPIParser) resolveSchemaRef(
-	proxy *base.SchemaProxy, circularSet map[string]bool,
+	proxy *base.SchemaProxy, circularSet map[string]bool, inlinePointer string,
 ) *SchemaRef {
 	if proxy == nil {
 		return nil
@@ -298,36 +312,45 @@ func (p *LibopenAPIParser) resolveSchemaRef(
 
 	name := schemaNameFromProxy(proxy)
 
+	// For $ref schemas, use the reference target as the pointer.
+	// For inline schemas, use the caller-provided pointer.
+	pointer := inlinePointer
+	if ref := proxy.GetReference(); ref != "" {
+		pointer = ref
+	}
+
 	return &SchemaRef{
 		Name:       name,
 		IsCircular: circularSet[name],
 		Raw:        schema,
+		Pointer:    pointer,
 	}
 }
 
 // findJSONMediaTypeSchema finds the schema for application/json (or compatible
-// JSON content type) in a content map. Returns nil if no JSON content type found.
+// JSON content type) in a content map. Returns the schema proxy and the matched
+// content type string. Returns (nil, "") if no JSON content type found.
 func findJSONMediaTypeSchema(
 	content *orderedmap.Map[string, *v3high.MediaType],
-) *base.SchemaProxy {
+) (*base.SchemaProxy, string) {
 	if content == nil {
-		return nil
+		return nil, ""
 	}
 
 	// Try exact match first.
 	if mt := content.GetOrZero("application/json"); mt != nil {
-		return mt.Schema
+		return mt.Schema, "application/json"
 	}
 
 	// Fall back to any application/*+json variant.
 	for pair := content.Oldest(); pair != nil; pair = pair.Next() {
 		ct := pair.Key
 		if strings.HasPrefix(ct, "application/") && strings.HasSuffix(ct, "+json") {
-			return pair.Value.Schema
+			return pair.Value.Schema, ct
 		}
 	}
 
-	return nil
+	return nil, ""
 }
 
 // schemaNameFromProxy extracts a human-readable name from a SchemaProxy.
@@ -354,10 +377,11 @@ func schemaNameFromRef(ref string) string {
 	return parts[len(parts)-1]
 }
 
-// discardHandler is a slog.Handler that discards all log output.
-type discardHandler struct{}
+// encodeJSONPointerToken encodes a string for use as a JSON Pointer token
+// per RFC 6901. The characters '~' and '/' must be escaped as '~0' and '~1'.
+func encodeJSONPointerToken(s string) string {
+	s = strings.ReplaceAll(s, "~", "~0")
+	s = strings.ReplaceAll(s, "/", "~1")
 
-func (discardHandler) Enabled(context.Context, slog.Level) bool  { return false }
-func (discardHandler) Handle(context.Context, slog.Record) error { return nil }
-func (d discardHandler) WithAttrs([]slog.Attr) slog.Handler      { return d }
-func (d discardHandler) WithGroup(string) slog.Handler           { return d }
+	return s
+}
