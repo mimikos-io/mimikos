@@ -1,7 +1,9 @@
 package parser
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/pb33f/libopenapi/datamodel/high/base"
 )
@@ -101,9 +103,16 @@ type (
 		// Raw is the resolved libopenapi schema. All $ref pointers have been
 		// followed — this is the concrete schema, never a proxy.
 		//
-		// Exposed for the Schema Compiler (Session 10) which needs full schema
-		// access to compile into jsonschema validators.
+		// Used by the Data Generator (Task 8) for structural schema access.
 		Raw *base.Schema
+
+		// Pointer is the JSON pointer to this schema within the original spec
+		// document. Used by the Schema Compiler to compile the correct schema.
+		//
+		// For $ref schemas: the reference target (e.g., "#/components/schemas/Pet").
+		// For inline schemas: the full path in the spec document
+		// (e.g., "#/paths/~1pets/get/responses/200/content/application~1json/schema").
+		Pointer string
 	}
 
 	// CircularRef records a circular reference detected during parsing.
@@ -126,6 +135,9 @@ type (
 		// IsArray is true when the cycle passes through an array items reference.
 		IsArray bool
 	}
+
+	// discardHandler is a slog.Handler that discards all log output.
+	discardHandler struct{}
 )
 
 // Sentinel errors for parser failures.
@@ -143,3 +155,8 @@ var (
 	// and the resulting model is nil (unrecoverable).
 	ErrBuildModel = errors.New("parser: failed to build document model")
 )
+
+func (discardHandler) Enabled(context.Context, slog.Level) bool  { return false }
+func (discardHandler) Handle(context.Context, slog.Record) error { return nil }
+func (d discardHandler) WithAttrs([]slog.Attr) slog.Handler      { return d }
+func (d discardHandler) WithGroup(string) slog.Handler           { return d }

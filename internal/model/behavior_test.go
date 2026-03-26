@@ -247,3 +247,13 @@ func TestBehaviorMapKey(t *testing.T) {
 	k4 := model.BehaviorMapKey("GET", "/pets/{petId}")
 	assert.NotEqual(t, k1, k4)
 }
+
+func TestCompiledSchema_Validate_NilSafe(t *testing.T) {
+	// Nil receiver should not panic.
+	var cs *model.CompiledSchema
+	assert.NoError(t, cs.Validate("anything"))
+
+	// Non-nil struct with nil Schema should not panic.
+	cs = &model.CompiledSchema{Name: "test"}
+	assert.NoError(t, cs.Validate("anything"))
+}
