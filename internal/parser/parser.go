@@ -1,0 +1,363 @@
+// Package parser implements the OpenAPI spec parser and schema resolver.
+// It wraps libopenapi to parse OpenAPI 3.0/3.1 specs into a normalized
+// internal model with resolved references and circular ref annotations.
+package parser
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"strconv"
+	"strings"
+
+	"github.com/pb33f/libopenapi"
+	"github.com/pb33f/libopenapi/datamodel/high/base"
+	v3high "github.com/pb33f/libopenapi/datamodel/high/v3"
+	"github.com/pb33f/libopenapi/orderedmap"
+)
+
+// SpecParser parses raw OpenAPI spec bytes into a normalized ParsedSpec.
+type SpecParser interface {
+	Parse(ctx context.Context, data []byte) (*ParsedSpec, error)
+}
+
+// LibopenAPIParser implements SpecParser using libopenapi.
+type LibopenAPIParser struct {
+	logger *slog.Logger
+}
+
+// NewLibopenAPIParser creates a parser with the given logger.
+// If logger is nil, a no-op logger is used (discards all output).
+func NewLibopenAPIParser(logger *slog.Logger) *LibopenAPIParser {
+	if logger == nil {
+		logger = slog.New(discardHandler{})
+	}
+
+	return &LibopenAPIParser{logger: logger}
+}
+
+// Parse parses raw OpenAPI spec bytes into a normalized ParsedSpec.
+func (p *LibopenAPIParser) Parse(ctx context.Context, data []byte) (*ParsedSpec, error) {
+	if len(data) == 0 {
+		return nil, ErrEmptyInput
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	doc, err := libopenapi.NewDocument(data)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidSpec, err)
+	}
+
+	version := doc.GetVersion()
+	if err := validateVersion(version); err != nil {
+		return nil, err
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	model, buildErr := doc.BuildV3Model()
+	if model == nil {
+		if buildErr != nil {
+			return nil, fmt.Errorf("%w: %w", ErrBuildModel, buildErr)
+		}
+
+		return nil, ErrBuildModel
+	}
+
+	if buildErr != nil {
+		p.logger.Warn("spec build produced warnings", "error", buildErr)
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	// Collect circular reference info.
+	circularSet, circularRefs := p.collectCircularRefs(model)
+
+	// Extract operations.
+	operations := p.extractOperations(model.Model, circularSet)
+
+	return &ParsedSpec{
+		Version:      version,
+		Title:        model.Model.Info.Title,
+		Operations:   operations,
+		CircularRefs: circularRefs,
+	}, nil
+}
+
+// validateVersion checks that the spec version is supported (OpenAPI 3.x).
+func validateVersion(version string) error {
+	if version == "" {
+		return fmt.Errorf("%w: version is empty", ErrInvalidSpec)
+	}
+
+	if strings.HasPrefix(version, "2.") || strings.HasPrefix(version, "1.") {
+		return fmt.Errorf("%w: %s (only OpenAPI 3.x is supported)", ErrUnsupportedVersion, version)
+	}
+
+	if !strings.HasPrefix(version, "3.") {
+		return fmt.Errorf("%w: %s", ErrUnsupportedVersion, version)
+	}
+
+	return nil
+}
+
+// collectCircularRefs extracts circular reference information from the model index
+// and returns a set of schema names involved in cycles (for per-schema annotation)
+// plus a list of CircularRef descriptors (for diagnostics).
+func (p *LibopenAPIParser) collectCircularRefs(
+	model *libopenapi.DocumentModel[v3high.Document],
+) (map[string]bool, []CircularRef) {
+	circularResults := model.Index.GetCircularReferences()
+	if len(circularResults) == 0 {
+		return nil, nil
+	}
+
+	circularSet := make(map[string]bool, len(circularResults))
+	refs := make([]CircularRef, 0, len(circularResults))
+
+	for _, cr := range circularResults {
+		// Extract schema name from the start reference.
+		name := schemaNameFromRef(cr.Start.Definition)
+		circularSet[name] = true
+
+		// Also mark all schemas in the journey.
+		for _, ref := range cr.Journey {
+			jName := schemaNameFromRef(ref.Definition)
+			if jName != "" {
+				circularSet[jName] = true
+			}
+		}
+
+		refs = append(refs, CircularRef{
+			SchemaName:     name,
+			JourneyPath:    cr.GenerateJourneyPath(),
+			IsInfiniteLoop: cr.IsInfiniteLoop,
+			IsPolymorphic:  cr.IsPolymorphicResult,
+			IsArray:        cr.IsArrayResult,
+		})
+
+		p.logger.Info("circular reference detected",
+			"schema", name,
+			"infinite", cr.IsInfiniteLoop,
+			"journey", cr.GenerateJourneyPath(),
+		)
+	}
+
+	return circularSet, refs
+}
+
+// extractOperations iterates all paths and operations in spec source order,
+// building the Operation slice.
+func (p *LibopenAPIParser) extractOperations(
+	doc v3high.Document, circularSet map[string]bool,
+) []Operation {
+	if doc.Paths == nil || doc.Paths.PathItems == nil {
+		return nil
+	}
+
+	var operations []Operation
+
+	for pathPair := doc.Paths.PathItems.Oldest(); pathPair != nil; pathPair = pathPair.Next() {
+		path := pathPair.Key
+		pathItem := pathPair.Value
+
+		ops := pathItem.GetOperations()
+		if ops == nil {
+			continue
+		}
+
+		for opPair := ops.Oldest(); opPair != nil; opPair = opPair.Next() {
+			method := strings.ToUpper(opPair.Key)
+			v3Op := opPair.Value
+
+			op := Operation{
+				Method:      method,
+				Path:        path,
+				OperationID: v3Op.OperationId,
+				Summary:     v3Op.Summary,
+				Tags:        v3Op.Tags,
+			}
+
+			// Extract request body.
+			op.RequestBody = p.extractRequestBody(v3Op, circularSet)
+
+			// Extract responses.
+			op.Responses, op.DefaultResponse = p.extractResponses(v3Op, circularSet)
+
+			operations = append(operations, op)
+		}
+	}
+
+	return operations
+}
+
+// extractRequestBody extracts the JSON request body schema from an operation.
+func (p *LibopenAPIParser) extractRequestBody(
+	op *v3high.Operation, circularSet map[string]bool,
+) *RequestBody {
+	if op.RequestBody == nil || op.RequestBody.Content == nil {
+		return nil
+	}
+
+	schemaProxy := findJSONMediaTypeSchema(op.RequestBody.Content)
+	if schemaProxy == nil {
+		return nil
+	}
+
+	required := op.RequestBody.Required != nil && *op.RequestBody.Required
+
+	return &RequestBody{
+		Required: required,
+		Schema:   p.resolveSchemaRef(schemaProxy, circularSet),
+	}
+}
+
+// extractResponses extracts JSON response schemas keyed by status code,
+// plus the default response if present.
+func (p *LibopenAPIParser) extractResponses(
+	op *v3high.Operation, circularSet map[string]bool,
+) (map[int]*Response, *Response) {
+	if op.Responses == nil {
+		return nil, nil
+	}
+
+	var responses map[int]*Response
+
+	if op.Responses.Codes != nil {
+		responses = make(map[int]*Response, op.Responses.Codes.Len())
+
+		for codePair := op.Responses.Codes.Oldest(); codePair != nil; codePair = codePair.Next() {
+			code, err := strconv.Atoi(codePair.Key)
+			if err != nil {
+				p.logger.Warn("skipping non-integer response code",
+					"code", codePair.Key,
+					"operation", op.OperationId,
+				)
+
+				continue
+			}
+
+			v3Resp := codePair.Value
+			resp := &Response{
+				StatusCode:  code,
+				Description: v3Resp.Description,
+			}
+
+			if v3Resp.Content != nil {
+				if schemaProxy := findJSONMediaTypeSchema(v3Resp.Content); schemaProxy != nil {
+					resp.Schema = p.resolveSchemaRef(schemaProxy, circularSet)
+				}
+			}
+
+			responses[code] = resp
+		}
+	}
+
+	// Default response.
+	var defaultResp *Response
+
+	if op.Responses.Default != nil {
+		v3Default := op.Responses.Default
+		defaultResp = &Response{
+			StatusCode:  0,
+			Description: v3Default.Description,
+		}
+
+		if v3Default.Content != nil {
+			if schemaProxy := findJSONMediaTypeSchema(v3Default.Content); schemaProxy != nil {
+				defaultResp.Schema = p.resolveSchemaRef(schemaProxy, circularSet)
+			}
+		}
+	}
+
+	return responses, defaultResp
+}
+
+// resolveSchemaRef resolves a SchemaProxy into a SchemaRef with name and
+// circular reference annotation.
+func (p *LibopenAPIParser) resolveSchemaRef(
+	proxy *base.SchemaProxy, circularSet map[string]bool,
+) *SchemaRef {
+	if proxy == nil {
+		return nil
+	}
+
+	schema := proxy.Schema()
+	if schema == nil {
+		p.logger.Warn("schema proxy resolved to nil", "ref", proxy.GetReference())
+
+		return nil
+	}
+
+	name := schemaNameFromProxy(proxy)
+
+	return &SchemaRef{
+		Name:       name,
+		IsCircular: circularSet[name],
+		Raw:        schema,
+	}
+}
+
+// findJSONMediaTypeSchema finds the schema for application/json (or compatible
+// JSON content type) in a content map. Returns nil if no JSON content type found.
+func findJSONMediaTypeSchema(
+	content *orderedmap.Map[string, *v3high.MediaType],
+) *base.SchemaProxy {
+	if content == nil {
+		return nil
+	}
+
+	// Try exact match first.
+	if mt := content.GetOrZero("application/json"); mt != nil {
+		return mt.Schema
+	}
+
+	// Fall back to any application/*+json variant.
+	for pair := content.Oldest(); pair != nil; pair = pair.Next() {
+		ct := pair.Key
+		if strings.HasPrefix(ct, "application/") && strings.HasSuffix(ct, "+json") {
+			return pair.Value.Schema
+		}
+	}
+
+	return nil
+}
+
+// schemaNameFromProxy extracts a human-readable name from a SchemaProxy.
+// For $ref proxies, it extracts the component name from the reference path.
+// For inline schemas, it returns an empty string (caller should generate a name).
+func schemaNameFromProxy(proxy *base.SchemaProxy) string {
+	ref := proxy.GetReference()
+	if ref != "" {
+		return schemaNameFromRef(ref)
+	}
+
+	return ""
+}
+
+// schemaNameFromRef extracts the schema name from a $ref string.
+// e.g., "#/components/schemas/Pet" → "Pet".
+func schemaNameFromRef(ref string) string {
+	if ref == "" {
+		return ""
+	}
+
+	parts := strings.Split(ref, "/")
+
+	return parts[len(parts)-1]
+}
+
+// discardHandler is a slog.Handler that discards all log output.
+type discardHandler struct{}
+
+func (discardHandler) Enabled(context.Context, slog.Level) bool  { return false }
+func (discardHandler) Handle(context.Context, slog.Record) error { return nil }
+func (d discardHandler) WithAttrs([]slog.Attr) slog.Handler      { return d }
+func (d discardHandler) WithGroup(string) slog.Handler           { return d }
