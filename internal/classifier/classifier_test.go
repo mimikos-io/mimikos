@@ -282,3 +282,83 @@ func TestClassify_RootPath(t *testing.T) {
 	result := c.Classify(op("GET", "/"))
 	assert.Equal(t, model.BehaviorList, result.Type)
 }
+
+// --- Pipeline interaction tests ---
+
+// TestClassify_Pipeline_L2AndL3_ConfidenceCapping verifies that L2 and L3
+// boosts are both applied and capped at 0.9.
+func TestClassify_Pipeline_L2AndL3_ConfidenceCapping(t *testing.T) {
+	c := newClassifier()
+
+	// POST /users with 201 response and "createUser" operationId.
+	// L1: create (0.8) → L2: 201 boost → 0.9 → L3: "create" confirms, capped at 0.9.
+	op := parser.Operation{
+		Method:      "POST",
+		Path:        "/users",
+		OperationID: "createUser",
+		Responses: map[int]*parser.Response{
+			201: {StatusCode: 201},
+		},
+	}
+
+	result := c.Classify(op)
+	assert.Equal(t, model.BehaviorCreate, result.Type)
+	assert.InDelta(t, 0.9, result.Confidence, 0.01,
+		"L2 + L3 boosts should cap at 0.9")
+}
+
+// TestClassify_Pipeline_ActionVerbCRUDKeywordOverlap exercises the interaction
+// between actionVerbs (L1) and crudKeywords (L3) for tokens that appear in
+// both sets (add, remove, insert, search). L1 detects the action and
+// produces generic at moderate confidence (0.6). L3 sees the same token as
+// a CRUD keyword but cannot override because confidence > 0.4.
+func TestClassify_Pipeline_ActionVerbCRUDKeywordOverlap(t *testing.T) {
+	c := newClassifier()
+
+	tests := []struct {
+		name        string
+		path        string
+		operationID string
+	}{
+		{"add in path and operationId", "/tasks/{id}/addFollowers", "addTaskFollowers"},
+		{"remove in path and operationId", "/tasks/{id}/removeFollowers", "removeTaskFollowers"},
+		{"insert in path", "/fields/{id}/insert", "insertEnumOption"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := parser.Operation{
+				Method:      "POST",
+				Path:        tt.path,
+				OperationID: tt.operationID,
+			}
+
+			result := c.Classify(op)
+			assert.Equal(t, model.BehaviorGeneric, result.Type,
+				"L1 action verb should produce generic, L3 should not override at moderate confidence")
+			assert.InDelta(t, 0.6, result.Confidence, 0.01,
+				"confidence stays at moderate (0.6), not overridden by L3")
+		})
+	}
+}
+
+// TestClassify_Pipeline_L3OverrideAtWeakConfidence verifies L3 can override
+// a weak L1 result (POST to item → generic 0.4) with an operationId signal.
+func TestClassify_Pipeline_L3OverrideAtWeakConfidence(t *testing.T) {
+	c := newClassifier()
+
+	op := parser.Operation{
+		Method:      "POST",
+		Path:        "/customers/{id}",
+		OperationID: "updateCustomer",
+		Responses: map[int]*parser.Response{
+			200: {StatusCode: 200},
+		},
+	}
+
+	result := c.Classify(op)
+	assert.Equal(t, model.BehaviorUpdate, result.Type,
+		"L3 overrides weak POST-to-item generic with update keyword")
+	assert.InDelta(t, 0.6, result.Confidence, 0.01,
+		"L3 override sets confidence to 0.6")
+}
