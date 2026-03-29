@@ -79,9 +79,9 @@
     "PUT /playlists/{playlist_id}/images": "generic",
     "DELETE /playlists/{playlist_id}/tracks": "generic",
     "GET /playlists/{playlist_id}/tracks": "list",
-    "POST /playlists/{playlist_id}/tracks": "generic",
+    "POST /playlists/{playlist_id}/tracks": "create",
     "PUT /playlists/{playlist_id}/tracks": "generic",
-    "GET /recommendations": "generic",
+    "GET /recommendations": "list",
     "GET /recommendations/available-genre-seeds": "list",
     "GET /search": "generic",
     "GET /shows": "list",
@@ -107,10 +107,10 @@
     "PUT /me/player/seek": "Seek to position (action)",
     "PUT /me/player/shuffle": "Toggle shuffle (action)",
     "PUT /me/player/volume": "Set volume (action)",
-    "GET /recommendations": "Recommendation engine (not a collection of resources)",
+    "GET /recommendations": "Revised: generic→list. Returns a list of track recommendations",
     "GET /search": "Search across resource types",
     "DELETE /playlists/{playlist_id}/tracks": "Remove items from playlist (action on collection)",
-    "POST /playlists/{playlist_id}/tracks": "Add items to playlist (action on collection)",
+    "POST /playlists/{playlist_id}/tracks": "Revised: generic→create. Adding tracks creates sub-resources in the playlist",
     "PUT /playlists/{playlist_id}/tracks": "Reorder/replace playlist items (action)"
   }
 }

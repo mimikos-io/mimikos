@@ -38,8 +38,8 @@
     "GET /repos/{owner}/{repo}/branches": "list",
     "GET /repos/{owner}/{repo}/branches/{branch}": "fetch",
     "GET /repos/{owner}/{repo}/collaborators": "list",
-    "PUT /repos/{owner}/{repo}/collaborators/{username}": "generic",
-    "DELETE /repos/{owner}/{repo}/collaborators/{username}": "generic",
+    "PUT /repos/{owner}/{repo}/collaborators/{username}": "update",
+    "DELETE /repos/{owner}/{repo}/collaborators/{username}": "delete",
     "GET /users": "list",
     "GET /users/{username}": "fetch",
     "GET /users/{username}/repos": "list",
@@ -53,7 +53,7 @@
     "PUT /app/installations/{installation_id}/suspended": "Suspend installation (state toggle)",
     "DELETE /app/installations/{installation_id}/suspended": "Unsuspend installation (state toggle)",
     "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge": "Merge a PR (action, not standard CRUD)",
-    "PUT /repos/{owner}/{repo}/collaborators/{username}": "Add collaborator (idempotent PUT, not standard update)",
-    "DELETE /repos/{owner}/{repo}/collaborators/{username}": "Remove collaborator (not deleting the collaborator resource)"
+    "PUT /repos/{owner}/{repo}/collaborators/{username}": "Revised: generic→update. PUT on item-level resource = update",
+    "DELETE /repos/{owner}/{repo}/collaborators/{username}": "Revised: generic→delete. DELETE on item-level resource = delete"
   }
 }
