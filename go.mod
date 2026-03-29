@@ -3,6 +3,7 @@ module github.com/mimikos-io/mimikos
 go 1.25.0
 
 require (
+	github.com/brianvoe/gofakeit/v7 v7.14.1
 	github.com/pb33f/libopenapi v0.34.3
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/stretchr/testify v1.11.1
