@@ -1,14 +1,3 @@
-// Package generator implements deterministic, schema-aware data generation
-// for Mimikos mock responses. It provides request fingerprinting, per-field
-// sub-seeding, and semantic field-name mapping as the foundation for
-// producing realistic, reproducible API response data.
-//
-// The generation pipeline:
-//
-//	Request → Fingerprint → FieldSeed (per field) → SemanticMapper / Faker → value
-//
-// All outputs are deterministic: identical requests always produce identical
-// response data across process restarts.
 package generator
 
 import (
