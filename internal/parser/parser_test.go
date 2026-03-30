@@ -1,4 +1,4 @@
-package parser_test
+package parser
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/mimikos-io/mimikos/internal/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,8 +32,8 @@ func loadSpec(t *testing.T, name string) []byte {
 }
 
 // newParser creates a LibopenAPIParser with no logger (quiet tests).
-func newParser() *parser.LibopenAPIParser {
-	return parser.NewLibopenAPIParser(nil)
+func newParser() *LibopenAPIParser {
+	return NewLibopenAPIParser(nil)
 }
 
 // --- Error Cases ---
@@ -43,17 +42,17 @@ func TestParse_EmptyInput(t *testing.T) {
 	p := newParser()
 
 	_, err := p.Parse(context.Background(), nil)
-	require.ErrorIs(t, err, parser.ErrEmptyInput)
+	require.ErrorIs(t, err, ErrEmptyInput)
 
 	_, err = p.Parse(context.Background(), []byte{})
-	require.ErrorIs(t, err, parser.ErrEmptyInput)
+	require.ErrorIs(t, err, ErrEmptyInput)
 }
 
 func TestParse_InvalidYAML(t *testing.T) {
 	p := newParser()
 
 	_, err := p.Parse(context.Background(), []byte("not: valid: yaml: ["))
-	assert.ErrorIs(t, err, parser.ErrInvalidSpec)
+	assert.ErrorIs(t, err, ErrInvalidSpec)
 }
 
 func TestParse_NotOpenAPI(t *testing.T) {
@@ -61,7 +60,7 @@ func TestParse_NotOpenAPI(t *testing.T) {
 
 	// Valid YAML but not an OpenAPI document.
 	_, err := p.Parse(context.Background(), []byte("name: just a yaml file\nversion: 1"))
-	assert.ErrorIs(t, err, parser.ErrInvalidSpec)
+	assert.ErrorIs(t, err, ErrInvalidSpec)
 }
 
 func TestParse_SwaggerV2(t *testing.T) {
@@ -74,7 +73,7 @@ info:
 paths: {}`)
 
 	_, err := p.Parse(context.Background(), spec)
-	assert.ErrorIs(t, err, parser.ErrUnsupportedVersion)
+	assert.ErrorIs(t, err, ErrUnsupportedVersion)
 }
 
 func TestParse_FutureVersion(t *testing.T) {
@@ -87,7 +86,7 @@ info:
 paths: {}`)
 
 	_, err := p.Parse(context.Background(), spec)
-	assert.ErrorIs(t, err, parser.ErrUnsupportedVersion)
+	assert.ErrorIs(t, err, ErrUnsupportedVersion)
 }
 
 func TestParse_ContextCancellation(t *testing.T) {
@@ -413,7 +412,7 @@ func TestIsNullable(t *testing.T) {
 		require.NotNil(t, tagPair)
 		tagSchema := tagPair.Schema()
 		require.NotNil(t, tagSchema)
-		assert.False(t, parser.IsNullable(tagSchema), "Pet.tag in 3.0 petstore is not nullable")
+		assert.False(t, IsNullable(tagSchema), "Pet.tag in 3.0 petstore is not nullable")
 	})
 
 	t.Run("3.0_nullable_true", func(t *testing.T) {
@@ -447,7 +446,7 @@ paths:
 		require.NotNil(t, nickPair)
 		nickSchema := nickPair.Schema()
 		require.NotNil(t, nickSchema)
-		assert.True(t, parser.IsNullable(nickSchema), "nickname with nullable: true should be nullable")
+		assert.True(t, IsNullable(nickSchema), "nickname with nullable: true should be nullable")
 	})
 
 	t.Run("3.1_type_array_with_null", func(t *testing.T) {
@@ -462,7 +461,7 @@ paths:
 		require.NotNil(t, tagPair)
 		tagSchema := tagPair.Schema()
 		require.NotNil(t, tagSchema)
-		assert.True(t, parser.IsNullable(tagSchema), "Pet.tag in 3.1 should be nullable")
+		assert.True(t, IsNullable(tagSchema), "Pet.tag in 3.1 should be nullable")
 	})
 }
 
@@ -481,7 +480,7 @@ func TestPrimaryType(t *testing.T) {
 		require.NotNil(t, namePair)
 		nameSchema := namePair.Schema()
 		require.NotNil(t, nameSchema)
-		assert.Equal(t, "string", parser.PrimaryType(nameSchema))
+		assert.Equal(t, "string", PrimaryType(nameSchema))
 	})
 
 	t.Run("type_array_with_null", func(t *testing.T) {
@@ -496,7 +495,7 @@ func TestPrimaryType(t *testing.T) {
 		require.NotNil(t, tagPair)
 		tagSchema := tagPair.Schema()
 		require.NotNil(t, tagSchema)
-		assert.Equal(t, "string", parser.PrimaryType(tagSchema))
+		assert.Equal(t, "string", PrimaryType(tagSchema))
 	})
 
 	t.Run("object_with_properties_no_type", func(t *testing.T) {
@@ -510,7 +509,7 @@ func TestPrimaryType(t *testing.T) {
 		// Pets schema is type: array — verify that works.
 		op := spec.Operations[0] // listPets
 		petsSchema := op.Responses[200].Schema.Raw
-		assert.Equal(t, "array", parser.PrimaryType(petsSchema))
+		assert.Equal(t, "array", PrimaryType(petsSchema))
 	})
 }
 
@@ -584,5 +583,5 @@ paths:
 // --- Interface Compliance ---
 
 func TestLibopenAPIParser_ImplementsInterface(_ *testing.T) {
-	var _ parser.SpecParser = newParser()
+	var _ SpecParser = newParser()
 }

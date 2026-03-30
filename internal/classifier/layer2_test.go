@@ -1,9 +1,8 @@
-package classifier_test
+package classifier
 
 import (
 	"testing"
 
-	"github.com/mimikos-io/mimikos/internal/classifier"
 	"github.com/mimikos-io/mimikos/internal/model"
 	"github.com/mimikos-io/mimikos/internal/parser"
 	"github.com/pb33f/libopenapi/datamodel/high/base"
@@ -13,7 +12,7 @@ import (
 // --- Layer 2: Array response confirmation ---
 
 func TestLayer2_GET_Collection_ArrayResponse_ConfirmsList(t *testing.T) {
-	c := classifier.New()
+	c := New()
 	op := parser.Operation{
 		Method: "GET",
 		Path:   "/pets",
@@ -32,7 +31,7 @@ func TestLayer2_GET_Collection_ArrayResponse_ConfirmsList(t *testing.T) {
 }
 
 func TestLayer2_GET_Collection_ObjectResponse_NoBehaviorChange(t *testing.T) {
-	c := classifier.New()
+	c := New()
 	op := parser.Operation{
 		Method: "GET",
 		Path:   "/pets",
@@ -51,7 +50,7 @@ func TestLayer2_GET_Collection_ObjectResponse_NoBehaviorChange(t *testing.T) {
 }
 
 func TestLayer2_GET_Collection_NoSchema_NoBehaviorChange(t *testing.T) {
-	c := classifier.New()
+	c := New()
 	op := parser.Operation{
 		Method: "GET",
 		Path:   "/pets",
@@ -67,7 +66,7 @@ func TestLayer2_GET_Collection_NoSchema_NoBehaviorChange(t *testing.T) {
 }
 
 func TestLayer2_GET_Item_ArrayResponse_DoesNotAffectFetch(t *testing.T) {
-	c := classifier.New()
+	c := New()
 
 	// GET item is fetch — array check only applies to list.
 	op := parser.Operation{
@@ -90,7 +89,7 @@ func TestLayer2_GET_Item_ArrayResponse_DoesNotAffectFetch(t *testing.T) {
 // --- Layer 2: Status code 201 ---
 
 func TestLayer2_POST_Collection_With201_ConfirmsCreate(t *testing.T) {
-	c := classifier.New()
+	c := New()
 	op := parser.Operation{
 		Method: "POST",
 		Path:   "/pets",
@@ -106,7 +105,7 @@ func TestLayer2_POST_Collection_With201_ConfirmsCreate(t *testing.T) {
 }
 
 func TestLayer2_POST_Collection_Without201_NoChange(t *testing.T) {
-	c := classifier.New()
+	c := New()
 	op := parser.Operation{
 		Method: "POST",
 		Path:   "/pets",
@@ -122,7 +121,7 @@ func TestLayer2_POST_Collection_Without201_NoChange(t *testing.T) {
 }
 
 func TestLayer2_POST_Collection_NoResponses_NoChange(t *testing.T) {
-	c := classifier.New()
+	c := New()
 	op := parser.Operation{
 		Method: "POST",
 		Path:   "/pets",
@@ -137,7 +136,7 @@ func TestLayer2_POST_Collection_NoResponses_NoChange(t *testing.T) {
 // --- Layer 2: Status code 204 ---
 
 func TestLayer2_DELETE_Item_With204_ConfirmsDelete(t *testing.T) {
-	c := classifier.New()
+	c := New()
 	op := parser.Operation{
 		Method: "DELETE",
 		Path:   "/pets/{petId}",
@@ -153,7 +152,7 @@ func TestLayer2_DELETE_Item_With204_ConfirmsDelete(t *testing.T) {
 }
 
 func TestLayer2_Generic_With204_ConfirmsGeneric(t *testing.T) {
-	c := classifier.New()
+	c := New()
 
 	// POST to action path (generic from L1).
 	op := parser.Operation{
@@ -171,7 +170,7 @@ func TestLayer2_Generic_With204_ConfirmsGeneric(t *testing.T) {
 }
 
 func TestLayer2_NonMatchingType_NoBehaviorChange(t *testing.T) {
-	c := classifier.New()
+	c := New()
 
 	// GET item is fetch — 204 should not affect it (only affects delete/generic).
 	op := parser.Operation{

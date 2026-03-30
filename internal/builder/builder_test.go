@@ -1,4 +1,4 @@
-package builder_test
+package builder
 
 import (
 	"context"
@@ -11,7 +11,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/mimikos-io/mimikos/internal/builder"
 	"github.com/mimikos-io/mimikos/internal/classifier"
 	"github.com/mimikos-io/mimikos/internal/compiler"
 	"github.com/mimikos-io/mimikos/internal/model"
@@ -39,19 +38,19 @@ type (
 )
 
 func TestBuildBehaviorMap_NilSpec(t *testing.T) {
-	_, err := builder.BuildBehaviorMap(nil, classifier.New(), nil, nil)
-	require.ErrorIs(t, err, builder.ErrNilSpec)
+	_, err := BuildBehaviorMap(nil, classifier.New(), nil, nil)
+	require.ErrorIs(t, err, ErrNilSpec)
 }
 
 func TestBuildBehaviorMap_NilClassifier(t *testing.T) {
 	spec := &parser.ParsedSpec{}
-	_, err := builder.BuildBehaviorMap(spec, nil, nil, nil)
-	require.ErrorIs(t, err, builder.ErrNilClassifier)
+	_, err := BuildBehaviorMap(spec, nil, nil, nil)
+	require.ErrorIs(t, err, ErrNilClassifier)
 }
 
 func TestBuildBehaviorMap_EmptySpec(t *testing.T) {
 	spec := &parser.ParsedSpec{}
-	bm, err := builder.BuildBehaviorMap(spec, classifier.New(), nil, nil)
+	bm, err := BuildBehaviorMap(spec, classifier.New(), nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, bm.Len())
 }
@@ -69,7 +68,7 @@ func TestBuildBehaviorMap_ListOperation(t *testing.T) {
 		},
 	}
 
-	bm, err := builder.BuildBehaviorMap(spec, classifier.New(), nil, nil)
+	bm, err := BuildBehaviorMap(spec, classifier.New(), nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, bm.Len())
 
@@ -99,7 +98,7 @@ func TestBuildBehaviorMap_CreateOperation(t *testing.T) {
 		},
 	}
 
-	bm, err := builder.BuildBehaviorMap(spec, classifier.New(), nil, nil)
+	bm, err := BuildBehaviorMap(spec, classifier.New(), nil, nil)
 	require.NoError(t, err)
 
 	entry, ok := bm.Get(http.MethodPost, "/pets")
@@ -125,7 +124,7 @@ func TestBuildBehaviorMap_DeletePrefers204(t *testing.T) {
 		},
 	}
 
-	bm, err := builder.BuildBehaviorMap(spec, classifier.New(), nil, nil)
+	bm, err := BuildBehaviorMap(spec, classifier.New(), nil, nil)
 	require.NoError(t, err)
 
 	entry, ok := bm.Get(http.MethodDelete, "/pets/{petId}")
@@ -146,7 +145,7 @@ func TestBuildBehaviorMap_NoResponsesDefaultsTo200(t *testing.T) {
 		},
 	}
 
-	bm, err := builder.BuildBehaviorMap(spec, classifier.New(), nil, nil)
+	bm, err := BuildBehaviorMap(spec, classifier.New(), nil, nil)
 	require.NoError(t, err)
 
 	entry, ok := bm.Get(http.MethodGet, "/pets")
@@ -169,7 +168,7 @@ func TestBuildBehaviorMap_OnlyErrorResponsesDefaultsTo200(t *testing.T) {
 		},
 	}
 
-	bm, err := builder.BuildBehaviorMap(spec, classifier.New(), nil, nil)
+	bm, err := BuildBehaviorMap(spec, classifier.New(), nil, nil)
 	require.NoError(t, err)
 
 	entry, ok := bm.Get(http.MethodGet, "/pets/{petId}")
@@ -191,7 +190,7 @@ func TestBuildBehaviorMap_FallbackToLowest2xx(t *testing.T) {
 		},
 	}
 
-	bm, err := builder.BuildBehaviorMap(spec, classifier.New(), nil, nil)
+	bm, err := BuildBehaviorMap(spec, classifier.New(), nil, nil)
 	require.NoError(t, err)
 
 	entry, ok := bm.Get(http.MethodGet, "/pets")
@@ -209,7 +208,7 @@ func TestBuildBehaviorMap_MultipleOperations(t *testing.T) {
 		},
 	}
 
-	bm, err := builder.BuildBehaviorMap(spec, classifier.New(), nil, nil)
+	bm, err := BuildBehaviorMap(spec, classifier.New(), nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 4, bm.Len())
 
@@ -250,7 +249,7 @@ func TestBuildBehaviorMap_NilCompilerSkipsSchemas(t *testing.T) {
 		},
 	}
 
-	bm, err := builder.BuildBehaviorMap(spec, classifier.New(), nil, nil)
+	bm, err := BuildBehaviorMap(spec, classifier.New(), nil, nil)
 	require.NoError(t, err)
 
 	entry, ok := bm.Get(http.MethodGet, "/pets")
@@ -275,7 +274,7 @@ func TestBuildBehaviorMap_ErrorCodesSorted(t *testing.T) {
 		},
 	}
 
-	bm, err := builder.BuildBehaviorMap(spec, classifier.New(), nil, nil)
+	bm, err := BuildBehaviorMap(spec, classifier.New(), nil, nil)
 	require.NoError(t, err)
 
 	entry, ok := bm.Get(http.MethodPut, "/pets/{petId}")
@@ -295,7 +294,7 @@ func TestBuildBehaviorMap_ConfidencePreserved(t *testing.T) {
 		},
 	}
 
-	bm, err := builder.BuildBehaviorMap(spec, classifier.New(), nil, nil)
+	bm, err := BuildBehaviorMap(spec, classifier.New(), nil, nil)
 	require.NoError(t, err)
 
 	entry, ok := bm.Get(http.MethodGet, "/pets")
@@ -408,7 +407,7 @@ func TestBuildBehaviorMap_WithCompiler(t *testing.T) {
 		},
 	}
 
-	bm, err := builder.BuildBehaviorMap(spec, classifier.New(), sc, nil)
+	bm, err := BuildBehaviorMap(spec, classifier.New(), sc, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 2, bm.Len())
 
@@ -499,7 +498,7 @@ func TestBuildBehaviorMap_DefaultResponseWithCompiler(t *testing.T) {
 		},
 	}
 
-	bm, err := builder.BuildBehaviorMap(spec, classifier.New(), sc, nil)
+	bm, err := BuildBehaviorMap(spec, classifier.New(), sc, nil)
 	require.NoError(t, err)
 
 	entry, ok := bm.Get(http.MethodGet, "/pets")
@@ -560,7 +559,7 @@ func TestBuildBehaviorMap_SchemaCompilationFailureIsResilient(t *testing.T) {
 		},
 	}
 
-	bm, err := builder.BuildBehaviorMap(spec, classifier.New(), sc, nil)
+	bm, err := BuildBehaviorMap(spec, classifier.New(), sc, nil)
 	require.NoError(t, err, "should not fail on individual schema compilation error")
 	assert.Equal(t, 2, bm.Len(), "both operations should be in the map")
 
@@ -587,7 +586,7 @@ func TestBuildBehaviorMap_OperationIDPreserved(t *testing.T) {
 		},
 	}
 
-	bm, err := builder.BuildBehaviorMap(spec, classifier.New(), nil, nil)
+	bm, err := BuildBehaviorMap(spec, classifier.New(), nil, nil)
 	require.NoError(t, err)
 
 	entry, ok := bm.Get(http.MethodGet, "/pets")
@@ -667,7 +666,7 @@ func TestCorpusBuildBehaviorMap(t *testing.T) {
 		sc, compileErr := compiler.New(specData, spec.Version)
 		require.NoError(t, compileErr, "creating compiler for %s", specName)
 
-		bm, buildErr := builder.BuildBehaviorMap(spec, cls, sc, nil)
+		bm, buildErr := BuildBehaviorMap(spec, cls, sc, nil)
 		require.NoError(t, buildErr, "building behavior map for %s", specName)
 
 		var (

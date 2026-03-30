@@ -1,4 +1,4 @@
-package generator_test
+package generator
 
 import (
 	"fmt"
@@ -12,13 +12,12 @@ import (
 	"unicode"
 
 	"github.com/brianvoe/gofakeit/v7"
-	"github.com/mimikos-io/mimikos/internal/generator"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSemanticMapper_KnownNamesMatch(t *testing.T) {
-	m := generator.NewSemanticMapper()
+	m := NewSemanticMapper()
 
 	knownNames := []string{
 		"email", "firstName", "city", "url", "createdAt",
@@ -35,7 +34,7 @@ func TestSemanticMapper_KnownNamesMatch(t *testing.T) {
 }
 
 func TestSemanticMapper_CaseInsensitivity(t *testing.T) {
-	m := generator.NewSemanticMapper()
+	m := NewSemanticMapper()
 
 	variants := []string{"email", "Email", "EMAIL", "eMaIl"}
 
@@ -58,7 +57,7 @@ func TestSemanticMapper_CaseInsensitivity(t *testing.T) {
 }
 
 func TestSemanticMapper_SnakeCaseNormalization(t *testing.T) {
-	m := generator.NewSemanticMapper()
+	m := NewSemanticMapper()
 
 	tests := []struct {
 		snakeCase string
@@ -82,14 +81,14 @@ func TestSemanticMapper_SnakeCaseNormalization(t *testing.T) {
 }
 
 func TestSemanticMapper_KebabCaseNormalization(t *testing.T) {
-	m := generator.NewSemanticMapper()
+	m := NewSemanticMapper()
 
 	_, ok := m.Match("first-name")
 	assert.True(t, ok, "kebab-case first-name must match")
 }
 
 func TestSemanticMapper_UnknownNameFallthrough(t *testing.T) {
-	m := generator.NewSemanticMapper()
+	m := NewSemanticMapper()
 
 	unknowns := []string{"fooBarBaz", "xyzzy", "qwerty123", "somethingRandom"}
 
@@ -103,7 +102,7 @@ func TestSemanticMapper_UnknownNameFallthrough(t *testing.T) {
 }
 
 func TestSemanticMapper_Determinism(t *testing.T) {
-	m := generator.NewSemanticMapper()
+	m := NewSemanticMapper()
 	fn, ok := m.Match("email")
 	require.True(t, ok)
 
@@ -118,7 +117,7 @@ func TestSemanticMapper_Determinism(t *testing.T) {
 }
 
 func TestSemanticMapper_Differentiation(t *testing.T) {
-	m := generator.NewSemanticMapper()
+	m := NewSemanticMapper()
 	fn, ok := m.Match("email")
 	require.True(t, ok)
 
@@ -132,7 +131,7 @@ func TestSemanticMapper_Differentiation(t *testing.T) {
 }
 
 func TestSemanticMapper_CategoryCoverage(t *testing.T) {
-	m := generator.NewSemanticMapper()
+	m := NewSemanticMapper()
 
 	// uuidPattern matches v4 UUIDs and most hex-formatted UUIDs from gofakeit.
 	uuidPattern := regexp.MustCompile(
@@ -305,7 +304,7 @@ func TestSemanticMapper_CategoryCoverage(t *testing.T) {
 }
 
 func TestSemanticMapper_MinimumEntryCount(t *testing.T) {
-	m := generator.NewSemanticMapper()
+	m := NewSemanticMapper()
 
 	assert.GreaterOrEqual(t, m.Len(), 100,
 		"semantic mapper must have at least 100 field-name entries")
@@ -324,7 +323,7 @@ func isAlphaString(s string) bool {
 
 // TestSemanticMapper_TimeFields verifies date-only fields produce date format (not datetime).
 func TestSemanticMapper_TimeFields(t *testing.T) {
-	m := generator.NewSemanticMapper()
+	m := NewSemanticMapper()
 	datePattern := regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 
 	dateOnlyFields := []string{"date", "birthday", "dob", "dueDate"}
@@ -345,7 +344,7 @@ func TestSemanticMapper_TimeFields(t *testing.T) {
 
 // TestSemanticMapper_IDFields verifies various ID field patterns match.
 func TestSemanticMapper_IDFields(t *testing.T) {
-	m := generator.NewSemanticMapper()
+	m := NewSemanticMapper()
 
 	idFields := []string{"id", "uuid", "userId", "orderId", "accountId", "sessionId", "requestId"}
 	for _, name := range idFields {
@@ -368,7 +367,7 @@ func TestSemanticMapper_IDFields(t *testing.T) {
 
 // TestSemanticMapper_BooleanFields verifies boolean flag fields return bool type.
 func TestSemanticMapper_BooleanFields(t *testing.T) {
-	m := generator.NewSemanticMapper()
+	m := NewSemanticMapper()
 
 	boolFields := []string{
 		"isActive", "is_deleted", "enabled", "verified", "published", "archived",
@@ -388,7 +387,7 @@ func TestSemanticMapper_BooleanFields(t *testing.T) {
 
 // TestSemanticMapper_FinancialFieldsPrecision verifies financial fields use 2 decimal places.
 func TestSemanticMapper_FinancialFieldsPrecision(t *testing.T) {
-	m := generator.NewSemanticMapper()
+	m := NewSemanticMapper()
 
 	financialFields := []string{"price", "amount", "total", "balance", "cost"}
 	for _, name := range financialFields {

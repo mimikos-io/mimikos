@@ -1,4 +1,4 @@
-package compiler_test
+package compiler
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/mimikos-io/mimikos/internal/compiler"
 	"github.com/mimikos-io/mimikos/internal/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,7 +63,7 @@ func unmarshalJSON(t *testing.T, jsonStr string) any {
 func TestNew_Petstore30(t *testing.T) {
 	data := loadSpec(t, "petstore-3.0.yaml")
 
-	sc, err := compiler.New(data, "3.0.0")
+	sc, err := New(data, "3.0.0")
 	require.NoError(t, err)
 	require.NotNil(t, sc)
 }
@@ -72,22 +71,22 @@ func TestNew_Petstore30(t *testing.T) {
 func TestNew_Petstore31(t *testing.T) {
 	data := loadSpec(t, "petstore-3.1.yaml")
 
-	sc, err := compiler.New(data, "3.1.0")
+	sc, err := New(data, "3.1.0")
 	require.NoError(t, err)
 	require.NotNil(t, sc)
 }
 
 func TestNew_EmptyInput(t *testing.T) {
-	_, err := compiler.New(nil, "3.0.0")
-	require.ErrorIs(t, err, compiler.ErrEmptyInput)
+	_, err := New(nil, "3.0.0")
+	require.ErrorIs(t, err, ErrEmptyInput)
 
-	_, err = compiler.New([]byte{}, "3.0.0")
-	require.ErrorIs(t, err, compiler.ErrEmptyInput)
+	_, err = New([]byte{}, "3.0.0")
+	require.ErrorIs(t, err, ErrEmptyInput)
 }
 
 func TestNew_InvalidYAML(t *testing.T) {
-	_, err := compiler.New([]byte("not: valid: yaml: ["), "3.0.0")
-	assert.ErrorIs(t, err, compiler.ErrInvalidSpec)
+	_, err := New([]byte("not: valid: yaml: ["), "3.0.0")
+	assert.ErrorIs(t, err, ErrInvalidSpec)
 }
 
 // --- Compile Component Schemas ---
@@ -95,7 +94,7 @@ func TestNew_InvalidYAML(t *testing.T) {
 func TestCompile_SimpleObjectSchema(t *testing.T) {
 	data, spec := parseSpec(t, "petstore-3.0.yaml")
 
-	sc, err := compiler.New(data, spec.Version)
+	sc, err := New(data, spec.Version)
 	require.NoError(t, err)
 
 	// Find the Pet schema from showPetById response.
@@ -126,7 +125,7 @@ func TestCompile_SimpleObjectSchema(t *testing.T) {
 func TestCompile_ArraySchema(t *testing.T) {
 	data, spec := parseSpec(t, "petstore-3.0.yaml")
 
-	sc, err := compiler.New(data, spec.Version)
+	sc, err := New(data, spec.Version)
 	require.NoError(t, err)
 
 	// Pets schema (array of Pet) from listPets response.
@@ -194,7 +193,7 @@ components:
 	spec, err := p.Parse(context.Background(), specBytes)
 	require.NoError(t, err)
 
-	sc, err := compiler.New(specBytes, spec.Version)
+	sc, err := New(specBytes, spec.Version)
 	require.NoError(t, err)
 
 	itemRef := spec.Operations[0].Responses[200].Schema
@@ -227,7 +226,7 @@ components:
 func TestCompile_OneOfSchema(t *testing.T) {
 	data, spec := parseSpec(t, "petstore-3.1.yaml")
 
-	sc, err := compiler.New(data, spec.Version)
+	sc, err := New(data, spec.Version)
 	require.NoError(t, err)
 
 	// Pet schema has oneOf for status field.
@@ -268,7 +267,7 @@ func TestCompile_CircularSchema(t *testing.T) {
 	// Verify Category is detected as circular by the parser.
 	require.NotEmpty(t, spec.CircularRefs)
 
-	sc, err := compiler.New(data, spec.Version)
+	sc, err := New(data, spec.Version)
 	require.NoError(t, err)
 
 	// Compile the circular Category schema directly by pointer.
@@ -330,7 +329,7 @@ components:
 	spec, err := p.Parse(context.Background(), specBytes)
 	require.NoError(t, err)
 
-	sc, err := compiler.New(specBytes, spec.Version)
+	sc, err := New(specBytes, spec.Version)
 	require.NoError(t, err)
 
 	itemRef := spec.Operations[0].Responses[200].Schema
@@ -391,7 +390,7 @@ components:
 	spec, err := p.Parse(context.Background(), specBytes)
 	require.NoError(t, err)
 
-	sc, err := compiler.New(specBytes, spec.Version)
+	sc, err := New(specBytes, spec.Version)
 	require.NoError(t, err)
 
 	orderRef := spec.Operations[0].Responses[200].Schema
@@ -449,7 +448,7 @@ components:
 	spec, err := p.Parse(context.Background(), specBytes)
 	require.NoError(t, err)
 
-	sc, err := compiler.New(specBytes, spec.Version)
+	sc, err := New(specBytes, spec.Version)
 	require.NoError(t, err)
 
 	itemRef := spec.Operations[0].Responses[200].Schema
@@ -509,7 +508,7 @@ components:
 	spec, err := p.Parse(context.Background(), specBytes)
 	require.NoError(t, err)
 
-	sc, err := compiler.New(specBytes, spec.Version)
+	sc, err := New(specBytes, spec.Version)
 	require.NoError(t, err)
 
 	itemRef := spec.Operations[0].Responses[200].Schema
@@ -563,7 +562,7 @@ paths:
 	spec, err := p.Parse(context.Background(), specBytes)
 	require.NoError(t, err)
 
-	sc, err := compiler.New(specBytes, spec.Version)
+	sc, err := New(specBytes, spec.Version)
 	require.NoError(t, err)
 
 	// Inline schema should have a full JSON pointer path (not a $ref).
@@ -588,12 +587,12 @@ paths:
 func TestCompile_InvalidPointer(t *testing.T) {
 	data := loadSpec(t, "petstore-3.0.yaml")
 
-	sc, err := compiler.New(data, "3.0.0")
+	sc, err := New(data, "3.0.0")
 	require.NoError(t, err)
 
 	// Pointer to non-existent schema.
 	_, err = sc.Compile("#/components/schemas/NonExistent", "NonExistent", false)
-	require.ErrorIs(t, err, compiler.ErrCompile)
+	require.ErrorIs(t, err, ErrCompile)
 }
 
 // --- Pointer Values on Parsed Specs ---

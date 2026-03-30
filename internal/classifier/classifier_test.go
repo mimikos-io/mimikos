@@ -1,16 +1,15 @@
-package classifier_test
+package classifier
 
 import (
 	"testing"
 
-	"github.com/mimikos-io/mimikos/internal/classifier"
 	"github.com/mimikos-io/mimikos/internal/model"
 	"github.com/mimikos-io/mimikos/internal/parser"
 	"github.com/stretchr/testify/assert"
 )
 
-func newClassifier() *classifier.Classifier {
-	return classifier.New()
+func newClassifier() *Classifier {
+	return New()
 }
 
 func op(method, path string) parser.Operation {
