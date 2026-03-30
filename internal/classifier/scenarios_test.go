@@ -1,9 +1,8 @@
-package classifier_test
+package classifier
 
 import (
 	"testing"
 
-	"github.com/mimikos-io/mimikos/internal/classifier"
 	"github.com/mimikos-io/mimikos/internal/model"
 	"github.com/stretchr/testify/assert"
 )
@@ -48,14 +47,14 @@ func TestInferScenarios(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := classifier.InferScenarios(tt.behavior)
+			got := InferScenarios(tt.behavior)
 			assert.Equal(t, tt.want, got)
 		})
 	}
 }
 
 func TestInferScenarios_UnknownType_ReturnsSuccessOnly(t *testing.T) {
-	got := classifier.InferScenarios(model.BehaviorType("unknown"))
+	got := InferScenarios(model.BehaviorType("unknown"))
 	assert.Equal(t, []model.Scenario{model.ScenarioSuccess}, got,
 		"unknown behavior type should fall back to success-only")
 }

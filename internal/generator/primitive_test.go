@@ -1,4 +1,4 @@
-package generator_test
+package generator
 
 import (
 	"math"
@@ -11,8 +11,6 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/mimikos-io/mimikos/internal/generator"
 )
 
 // --- Primitive type tests (8.4.1) ---
@@ -20,7 +18,7 @@ import (
 func TestGenerateStringBasic(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{Types: newTypes("string")}
 
 	val, err := g.Generate(schema, 42, "")
@@ -34,7 +32,7 @@ func TestGenerateStringBasic(t *testing.T) {
 func TestGenerateStringFormats(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 
 	tests := []struct {
 		name   string
@@ -146,7 +144,7 @@ func TestGenerateStringFormats(t *testing.T) {
 func TestGenerateIntegerBasic(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{Types: newTypes("integer")}
 
 	val, err := g.Generate(schema, 42, "")
@@ -159,7 +157,7 @@ func TestGenerateIntegerBasic(t *testing.T) {
 func TestGenerateNumberBasic(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{Types: newTypes("number")}
 
 	val, err := g.Generate(schema, 42, "")
@@ -172,7 +170,7 @@ func TestGenerateNumberBasic(t *testing.T) {
 func TestGenerateBooleanBasic(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{Types: newTypes("boolean")}
 
 	val, err := g.Generate(schema, 42, "")
@@ -185,7 +183,7 @@ func TestGenerateBooleanBasic(t *testing.T) {
 func TestGenerateDeterminism(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 
 	tests := []struct {
 		name   string
@@ -217,7 +215,7 @@ func TestGenerateDeterminism(t *testing.T) {
 func TestGenerateDifferentiation(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{Types: newTypes("string")}
 
 	v1, err1 := g.Generate(schema, 1, "")
@@ -234,7 +232,7 @@ func TestGenerateDifferentiation(t *testing.T) {
 func TestGenerateStringMinLength(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{
 		Types:     newTypes("string"),
 		MinLength: ptr(10),
@@ -251,7 +249,7 @@ func TestGenerateStringMinLength(t *testing.T) {
 func TestGenerateStringMaxLength(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{
 		Types:     newTypes("string"),
 		MaxLength: ptr(5),
@@ -268,7 +266,7 @@ func TestGenerateStringMaxLength(t *testing.T) {
 func TestGenerateStringExactLength(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{
 		Types:     newTypes("string"),
 		MinLength: ptr(3),
@@ -286,7 +284,7 @@ func TestGenerateStringExactLength(t *testing.T) {
 func TestGenerateIntegerMinimum(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{
 		Types:   newTypes("integer"),
 		Minimum: newRat(100),
@@ -303,7 +301,7 @@ func TestGenerateIntegerMinimum(t *testing.T) {
 func TestGenerateIntegerMaximum(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{
 		Types:   newTypes("integer"),
 		Maximum: newRat(10),
@@ -320,7 +318,7 @@ func TestGenerateIntegerMaximum(t *testing.T) {
 func TestGenerateIntegerExclusiveMinimum(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{
 		Types:            newTypes("integer"),
 		ExclusiveMinimum: newRat(0),
@@ -337,7 +335,7 @@ func TestGenerateIntegerExclusiveMinimum(t *testing.T) {
 func TestGenerateIntegerExclusiveMaximum(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{
 		Types:            newTypes("integer"),
 		ExclusiveMaximum: newRat(100),
@@ -354,7 +352,7 @@ func TestGenerateIntegerExclusiveMaximum(t *testing.T) {
 func TestGenerateIntegerMinMax(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{
 		Types:   newTypes("integer"),
 		Minimum: newRat(5),
@@ -373,7 +371,7 @@ func TestGenerateIntegerMinMax(t *testing.T) {
 func TestGenerateIntegerMultipleOf(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{
 		Types:      newTypes("integer"),
 		MultipleOf: newRat(3),
@@ -390,7 +388,7 @@ func TestGenerateIntegerMultipleOf(t *testing.T) {
 func TestGenerateIntegerMultipleOfWithMinimum(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{
 		Types:      newTypes("integer"),
 		MultipleOf: newRat(5),
@@ -409,7 +407,7 @@ func TestGenerateIntegerMultipleOfWithMinimum(t *testing.T) {
 func TestGenerateNumberMinimum(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{
 		Types:   newTypes("number"),
 		Minimum: newRatF(1.5),
@@ -426,7 +424,7 @@ func TestGenerateNumberMinimum(t *testing.T) {
 func TestGenerateNumberMaximum(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{
 		Types:   newTypes("number"),
 		Maximum: newRatF(99.9),
@@ -443,7 +441,7 @@ func TestGenerateNumberMaximum(t *testing.T) {
 func TestGenerateNumberExclusiveMinimum(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{
 		Types:            newTypes("number"),
 		ExclusiveMinimum: newRatF(0.0),
@@ -460,7 +458,7 @@ func TestGenerateNumberExclusiveMinimum(t *testing.T) {
 func TestGenerateNumberMultipleOf(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{
 		Types:      newTypes("number"),
 		MultipleOf: newRatF(0.25),
@@ -481,7 +479,7 @@ func TestGenerateNumberMultipleOf(t *testing.T) {
 func TestGenerateEnumString(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{
 		Types: newTypes("string"),
 		Enum:  newEnum("active", "inactive", "pending"),
@@ -498,7 +496,7 @@ func TestGenerateEnumString(t *testing.T) {
 func TestGenerateEnumInteger(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 
 	t.Run("float64-values-from-JSON", func(t *testing.T) {
 		t.Parallel()
@@ -539,7 +537,7 @@ func TestGenerateEnumInteger(t *testing.T) {
 func TestGenerateConst(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	constVal := any("fixed-value")
 	schema := &jsonschema.Schema{
 		Const: &constVal,
@@ -555,7 +553,7 @@ func TestGenerateConst(t *testing.T) {
 func TestGenerateInferStringFromMinLength(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{
 		MinLength: ptr(5),
 	}
@@ -571,7 +569,7 @@ func TestGenerateInferStringFromMinLength(t *testing.T) {
 func TestGenerateInferNumberFromMinimum(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{
 		Minimum: newRat(0),
 	}
@@ -586,7 +584,7 @@ func TestGenerateInferNumberFromMinimum(t *testing.T) {
 func TestGenerateInferFromEnum(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{
 		Enum: newEnum("x", "y"),
 	}
@@ -599,7 +597,7 @@ func TestGenerateInferFromEnum(t *testing.T) {
 func TestGenerateNoTypeNoHints(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{}
 
 	val, err := g.Generate(schema, 42, "")
@@ -614,8 +612,8 @@ func TestGenerateNoTypeNoHints(t *testing.T) {
 func TestGenerateSemanticEmail(t *testing.T) {
 	t.Parallel()
 
-	sm := generator.NewSemanticMapper()
-	g := generator.NewPrimitiveGenerator(sm)
+	sm := NewSemanticMapper()
+	g := NewPrimitiveGenerator(sm)
 	schema := &jsonschema.Schema{Types: newTypes("string")}
 
 	val, err := g.Generate(schema, 42, "email")
@@ -629,8 +627,8 @@ func TestGenerateSemanticEmail(t *testing.T) {
 func TestGenerateSemanticPrice(t *testing.T) {
 	t.Parallel()
 
-	sm := generator.NewSemanticMapper()
-	g := generator.NewPrimitiveGenerator(sm)
+	sm := NewSemanticMapper()
+	g := NewPrimitiveGenerator(sm)
 	schema := &jsonschema.Schema{Types: newTypes("number")}
 
 	val, err := g.Generate(schema, 42, "price")
@@ -644,8 +642,8 @@ func TestGenerateSemanticPrice(t *testing.T) {
 func TestGenerateSemanticTypeMismatchSkipped(t *testing.T) {
 	t.Parallel()
 
-	sm := generator.NewSemanticMapper()
-	g := generator.NewPrimitiveGenerator(sm)
+	sm := NewSemanticMapper()
+	g := NewPrimitiveGenerator(sm)
 	// Schema is boolean, but field name "email" maps to string generator.
 	// Semantic match should be skipped due to type incompatibility.
 	schema := &jsonschema.Schema{Types: newTypes("boolean")}
@@ -660,8 +658,8 @@ func TestGenerateSemanticTypeMismatchSkipped(t *testing.T) {
 func TestGenerateNoFieldName(t *testing.T) {
 	t.Parallel()
 
-	sm := generator.NewSemanticMapper()
-	g := generator.NewPrimitiveGenerator(sm)
+	sm := NewSemanticMapper()
+	g := NewPrimitiveGenerator(sm)
 	schema := &jsonschema.Schema{Types: newTypes("string")}
 
 	val, err := g.Generate(schema, 42, "")
@@ -677,7 +675,7 @@ func TestGenerateNoFieldName(t *testing.T) {
 func TestGenerateNilMapper(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{Types: newTypes("string")}
 
 	val, err := g.Generate(schema, 42, "email")
@@ -692,7 +690,7 @@ func TestGenerateNilMapper(t *testing.T) {
 func TestGenerateUnsupportedTypes(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 
 	unsupported := []struct {
 		name   string
@@ -709,7 +707,7 @@ func TestGenerateUnsupportedTypes(t *testing.T) {
 
 			_, err := g.Generate(tt.schema, 42, "")
 			require.Error(t, err)
-			assert.ErrorIs(t, err, generator.ErrUnsupportedType)
+			assert.ErrorIs(t, err, ErrUnsupportedType)
 		})
 	}
 }
@@ -719,7 +717,7 @@ func TestGenerateUnsupportedTypes(t *testing.T) {
 func TestGenerateEnumDeterministic(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{
 		Types: newTypes("string"),
 		Enum:  newEnum("a", "b", "c"),
@@ -739,7 +737,7 @@ func TestGenerateEnumDeterministic(t *testing.T) {
 func TestGenerateEnumVariation(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{
 		Types: newTypes("string"),
 		Enum:  newEnum("a", "b", "c", "d", "e"),
@@ -764,7 +762,7 @@ func TestGenerateEnumVariation(t *testing.T) {
 func TestGenerateEnumMinInt64Seed(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{
 		Types: newTypes("string"),
 		Enum:  newEnum("a", "b", "c"),
@@ -784,7 +782,7 @@ func TestGenerateEnumMinInt64Seed(t *testing.T) {
 func TestGenerateFormatRespectsMaxLength(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 
 	tests := []struct {
 		name      string
@@ -821,7 +819,7 @@ func TestGenerateFormatRespectsMaxLength(t *testing.T) {
 func TestGenerateStringMaxLengthZero(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{
 		Types:     newTypes("string"),
 		MaxLength: ptr(0),
@@ -839,7 +837,7 @@ func TestGenerateStringMaxLengthZero(t *testing.T) {
 func TestGenerateNullableString(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{Types: newTypes("string", "null")}
 
 	val, err := g.Generate(schema, 42, "")
@@ -853,7 +851,7 @@ func TestGenerateNullableString(t *testing.T) {
 func TestGenerateNullableInteger(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := NewPrimitiveGenerator(nil)
 	schema := &jsonschema.Schema{Types: newTypes("integer", "null")}
 
 	val, err := g.Generate(schema, 42, "")

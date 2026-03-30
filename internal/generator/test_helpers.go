@@ -1,4 +1,4 @@
-package generator_test
+package generator
 
 import (
 	"math/big"

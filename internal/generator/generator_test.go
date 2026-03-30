@@ -1,4 +1,4 @@
-package generator_test
+package generator
 
 import (
 	"testing"
@@ -6,8 +6,6 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/mimikos-io/mimikos/internal/generator"
 )
 
 // --- Object generation tests (8.4.3) ---
@@ -15,7 +13,7 @@ import (
 func TestGenerateSimpleObject(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := objectSchema(map[string]*jsonschema.Schema{
 		"name": {Types: newTypes("string")},
 		"age":  {Types: newTypes("integer")},
@@ -35,7 +33,7 @@ func TestGenerateSimpleObject(t *testing.T) {
 func TestGenerateObjectOptionalFieldsIncluded(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := objectSchema(map[string]*jsonschema.Schema{
 		"name": {Types: newTypes("string")},
 		"bio":  {Types: newTypes("string")},
@@ -53,7 +51,7 @@ func TestGenerateObjectOptionalFieldsIncluded(t *testing.T) {
 func TestGenerateNestedObject(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := objectSchema(map[string]*jsonschema.Schema{
 		"address": objectSchema(map[string]*jsonschema.Schema{
 			"city": {Types: newTypes("string")},
@@ -76,7 +74,7 @@ func TestGenerateNestedObject(t *testing.T) {
 func TestGenerateObjectPerFieldSubSeeding(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := objectSchema(map[string]*jsonschema.Schema{
 		"name":  {Types: newTypes("string")},
 		"email": {Types: newTypes("string")},
@@ -95,7 +93,7 @@ func TestGenerateObjectPerFieldSubSeeding(t *testing.T) {
 func TestGenerateObjectFieldIndependence(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 
 	// Schema with two fields.
 	schema1 := objectSchema(map[string]*jsonschema.Schema{
@@ -130,7 +128,7 @@ func TestGenerateObjectFieldIndependence(t *testing.T) {
 func TestGenerateEmptyObject(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := objectSchema(map[string]*jsonschema.Schema{})
 
 	val, err := g.Generate(schema, 42)
@@ -144,7 +142,7 @@ func TestGenerateEmptyObject(t *testing.T) {
 func TestGenerateMapType(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		Types:                newTypes("object"),
 		AdditionalProperties: &jsonschema.Schema{Types: newTypes("string")},
@@ -166,7 +164,7 @@ func TestGenerateMapType(t *testing.T) {
 func TestGenerateObjectDeterminism(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := objectSchema(map[string]*jsonschema.Schema{
 		"id":   {Types: newTypes("integer")},
 		"name": {Types: newTypes("string")},
@@ -194,7 +192,7 @@ func TestGenerateObjectDeterminism(t *testing.T) {
 func TestGenerateSimpleArray(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		Types:     newTypes("array"),
 		Items2020: &jsonschema.Schema{Types: newTypes("string")},
@@ -215,7 +213,7 @@ func TestGenerateSimpleArray(t *testing.T) {
 func TestGenerateArrayOfObjects(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		Types: newTypes("array"),
 		Items2020: objectSchema(map[string]*jsonschema.Schema{
@@ -242,7 +240,7 @@ func TestGenerateArrayOfObjects(t *testing.T) {
 func TestGenerateArrayMinItems(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		Types:     newTypes("array"),
 		Items2020: &jsonschema.Schema{Types: newTypes("integer")},
@@ -260,7 +258,7 @@ func TestGenerateArrayMinItems(t *testing.T) {
 func TestGenerateArrayMaxItems(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		Types:     newTypes("array"),
 		Items2020: &jsonschema.Schema{Types: newTypes("integer")},
@@ -278,7 +276,7 @@ func TestGenerateArrayMaxItems(t *testing.T) {
 func TestGenerateArrayMinMaxItems(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		Types:     newTypes("array"),
 		Items2020: &jsonschema.Schema{Types: newTypes("string")},
@@ -298,7 +296,7 @@ func TestGenerateArrayMinMaxItems(t *testing.T) {
 func TestGenerateArrayUniqueItems(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		Types: newTypes("array"),
 		Items2020: &jsonschema.Schema{
@@ -327,7 +325,7 @@ func TestGenerateArrayUniqueItems(t *testing.T) {
 func TestGenerateArrayNoItemsSchema(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		Types: newTypes("array"),
 	}
@@ -343,7 +341,7 @@ func TestGenerateArrayNoItemsSchema(t *testing.T) {
 func TestGenerateArrayDraft07Items(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	itemSchema := &jsonschema.Schema{Types: newTypes("string")}
 	schema := &jsonschema.Schema{
 		Types: newTypes("array"),
@@ -365,7 +363,7 @@ func TestGenerateArrayDraft07Items(t *testing.T) {
 func TestGenerateArrayPerItemSubSeeding(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		Types:     newTypes("array"),
 		Items2020: &jsonschema.Schema{Types: newTypes("string")},
@@ -396,7 +394,7 @@ func TestGenerateArrayPerItemSubSeeding(t *testing.T) {
 func TestGenerateArrayDeterminism(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		Types:     newTypes("array"),
 		Items2020: &jsonschema.Schema{Types: newTypes("integer")},
@@ -416,7 +414,7 @@ func TestGenerateArrayDeterminism(t *testing.T) {
 func TestGenerateAllOfMergesProperties(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		AllOf: []*jsonschema.Schema{
 			objectSchema(map[string]*jsonschema.Schema{
@@ -440,7 +438,7 @@ func TestGenerateAllOfMergesProperties(t *testing.T) {
 func TestGenerateAllOfRequiredUnion(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		AllOf: []*jsonschema.Schema{
 			{
@@ -468,7 +466,7 @@ func TestGenerateAllOfRequiredUnion(t *testing.T) {
 func TestGenerateAllOfLastWriteWins(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		AllOf: []*jsonschema.Schema{
 			objectSchema(map[string]*jsonschema.Schema{
@@ -492,7 +490,7 @@ func TestGenerateAllOfLastWriteWins(t *testing.T) {
 func TestGenerateAllOfWithTopLevelProperties(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		Types: newTypes("object"),
 		Properties: map[string]*jsonschema.Schema{
@@ -517,7 +515,7 @@ func TestGenerateAllOfWithTopLevelProperties(t *testing.T) {
 func TestGenerateOneOfBranchSelection(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		OneOf: []*jsonschema.Schema{
 			objectSchema(map[string]*jsonschema.Schema{
@@ -545,7 +543,7 @@ func TestGenerateOneOfBranchSelection(t *testing.T) {
 func TestGenerateOneOfDeterminism(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		OneOf: []*jsonschema.Schema{
 			objectSchema(map[string]*jsonschema.Schema{"a": {Types: newTypes("string")}}),
@@ -566,7 +564,7 @@ func TestGenerateOneOfDeterminism(t *testing.T) {
 func TestGenerateOneOfVariation(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		OneOf: []*jsonschema.Schema{
 			objectSchema(map[string]*jsonschema.Schema{"a": {Types: newTypes("string")}}),
@@ -596,7 +594,7 @@ func TestGenerateOneOfVariation(t *testing.T) {
 func TestGenerateAnyOfBranchSelection(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		AnyOf: []*jsonschema.Schema{
 			{Types: newTypes("string")},
@@ -623,7 +621,7 @@ func TestGenerateAnyOfBranchSelection(t *testing.T) {
 func TestGenerateAnyOfDeterminism(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		AnyOf: []*jsonschema.Schema{
 			{Types: newTypes("string")},
@@ -643,7 +641,7 @@ func TestGenerateAnyOfDeterminism(t *testing.T) {
 func TestGenerateAllOfWithNestedOneOf(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		AllOf: []*jsonschema.Schema{
 			objectSchema(map[string]*jsonschema.Schema{
@@ -678,7 +676,7 @@ func TestGenerateAllOfWithNestedOneOf(t *testing.T) {
 func TestGenerateEmptyAllOf(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	// Empty allOf slice is effectively a no-op — schema falls through to
 	// default type resolution (string). This matches JSON Schema semantics:
 	// allOf with zero sub-schemas imposes no constraints.
@@ -694,7 +692,7 @@ func TestGenerateEmptyAllOf(t *testing.T) {
 func TestGenerateEmptyOneOf(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	// Empty oneOf slice — same reasoning as empty allOf.
 	schema := &jsonschema.Schema{
 		OneOf: []*jsonschema.Schema{},
@@ -710,7 +708,7 @@ func TestGenerateEmptyOneOf(t *testing.T) {
 func TestGenerateSelfReferencingObject(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0) // default maxDepth = 3
+	g := NewDataGenerator(nil, 0) // default maxDepth = 3
 
 	// Build self-referencing schema: TreeNode { name: string, children: [TreeNode] }
 	node := &jsonschema.Schema{
@@ -737,7 +735,7 @@ func TestGenerateSelfReferencingObject(t *testing.T) {
 func TestGenerateDepth1Termination(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 1)
+	g := NewDataGenerator(nil, 1)
 	schema := objectSchema(map[string]*jsonschema.Schema{
 		"name": {Types: newTypes("string")},
 		"child": objectSchema(map[string]*jsonschema.Schema{
@@ -758,7 +756,7 @@ func TestGenerateDepth1Termination(t *testing.T) {
 func TestGenerateDefaultDepth3(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0) // default = 3
+	g := NewDataGenerator(nil, 0) // default = 3
 
 	// Build 4-level nesting: L0 → L1 → L2 → L3.
 	schema := objectSchema(map[string]*jsonschema.Schema{
@@ -792,7 +790,7 @@ func TestGenerateDefaultDepth3(t *testing.T) {
 func TestGenerateArrayAtDepthLimit(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 1)
+	g := NewDataGenerator(nil, 1)
 	schema := objectSchema(map[string]*jsonschema.Schema{
 		"items": {
 			Types:     newTypes("array"),
@@ -813,7 +811,7 @@ func TestGenerateArrayAtDepthLimit(t *testing.T) {
 func TestGenerateCustomMaxDepth(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 5)
+	g := NewDataGenerator(nil, 5)
 
 	// 5-level nesting should all be populated.
 	schema := objectSchema(map[string]*jsonschema.Schema{
@@ -854,7 +852,7 @@ func TestGenerateCustomMaxDepth(t *testing.T) {
 func TestGenerateNonCircularStillLimited(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 2)
+	g := NewDataGenerator(nil, 2)
 
 	// 3 levels of non-circular nesting, maxDepth 2.
 	schema := objectSchema(map[string]*jsonschema.Schema{
@@ -880,7 +878,7 @@ func TestGenerateNonCircularStillLimited(t *testing.T) {
 func TestGenerateNullableObject(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		Types: newTypes("object", "null"),
 		Properties: map[string]*jsonschema.Schema{
@@ -900,7 +898,7 @@ func TestGenerateNullableObject(t *testing.T) {
 func TestGenerateNullableArray(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		Types:     newTypes("array", "null"),
 		Items2020: &jsonschema.Schema{Types: newTypes("string")},
@@ -917,7 +915,7 @@ func TestGenerateNullableArray(t *testing.T) {
 func TestGeneratePureNull(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		Types: newTypes("null"),
 	}
@@ -932,8 +930,8 @@ func TestGeneratePureNull(t *testing.T) {
 func TestGenerateNestedObjectWithSemanticMapping(t *testing.T) {
 	t.Parallel()
 
-	sm := generator.NewSemanticMapper()
-	g := generator.NewDataGenerator(sm, 0)
+	sm := NewSemanticMapper()
+	g := NewDataGenerator(sm, 0)
 
 	schema := objectSchema(map[string]*jsonschema.Schema{
 		"user": objectSchema(map[string]*jsonschema.Schema{
@@ -968,8 +966,8 @@ func TestGenerateNestedObjectWithSemanticMapping(t *testing.T) {
 func TestGenerateArrayOfObjectsWithSemanticFields(t *testing.T) {
 	t.Parallel()
 
-	sm := generator.NewSemanticMapper()
-	g := generator.NewDataGenerator(sm, 0)
+	sm := NewSemanticMapper()
+	g := NewDataGenerator(sm, 0)
 
 	schema := &jsonschema.Schema{
 		Types: newTypes("array"),
@@ -1006,8 +1004,8 @@ func TestGenerateArrayOfObjectsWithSemanticFields(t *testing.T) {
 func TestGenerateRealisticPetSchema(t *testing.T) {
 	t.Parallel()
 
-	sm := generator.NewSemanticMapper()
-	g := generator.NewDataGenerator(sm, 0)
+	sm := NewSemanticMapper()
+	g := NewDataGenerator(sm, 0)
 
 	schema := objectSchema(map[string]*jsonschema.Schema{
 		"id":   {Types: newTypes("integer")},
@@ -1056,7 +1054,7 @@ func TestGenerateRealisticPetSchema(t *testing.T) {
 func TestGenerateRefFollowing(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 
 	// Target schema (what the $ref points to).
 	target := objectSchema(map[string]*jsonschema.Schema{
@@ -1079,7 +1077,7 @@ func TestGenerateRefFollowing(t *testing.T) {
 func TestGeneratePrimitiveThroughDataGenerator(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 
 	// String schema.
 	val, err := g.Generate(&jsonschema.Schema{Types: newTypes("string")}, 42)
@@ -1103,7 +1101,7 @@ func TestGeneratePrimitiveThroughDataGenerator(t *testing.T) {
 func TestGenerateCircularAllOfTerminates(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 
 	// SchemaA.allOf → SchemaB, SchemaB.allOf → SchemaA (mutual cycle via $ref).
 	schemaA := &jsonschema.Schema{}
@@ -1123,7 +1121,7 @@ func TestGenerateCircularAllOfTerminates(t *testing.T) {
 func TestGenerateCircularOneOfTerminates(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 
 	// Self-referencing oneOf: Discount = oneOf [ {props: {name}}, $ref Discount ]
 	discount := &jsonschema.Schema{}
@@ -1144,7 +1142,7 @@ func TestGenerateCircularOneOfTerminates(t *testing.T) {
 func TestGenerateAllOfSiblingOneOfIndependentSeeds(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		AllOf: []*jsonschema.Schema{
 			{
@@ -1192,7 +1190,7 @@ func TestGenerateAllOfSiblingOneOfIndependentSeeds(t *testing.T) {
 func TestGenerateTupleArray(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		Types: newTypes("array"),
 		PrefixItems: []*jsonschema.Schema{
@@ -1217,7 +1215,7 @@ func TestGenerateTupleArray(t *testing.T) {
 func TestGenerateTupleArrayDeterminism(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		Types: newTypes("array"),
 		PrefixItems: []*jsonschema.Schema{
@@ -1239,7 +1237,7 @@ func TestGenerateTupleArrayDeterminism(t *testing.T) {
 func TestGenerateAdditionalPropertiesFalse(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		Types:                newTypes("object"),
 		AdditionalProperties: false,
@@ -1256,7 +1254,7 @@ func TestGenerateAdditionalPropertiesFalse(t *testing.T) {
 func TestGenerateAdditionalPropertiesTrue(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewDataGenerator(nil, 0)
+	g := NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
 		Types:                newTypes("object"),
 		AdditionalProperties: true,

@@ -1,4 +1,4 @@
-package classifier_test
+package classifier
 
 import (
 	"context"
@@ -10,7 +10,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/mimikos-io/mimikos/internal/classifier"
 	"github.com/mimikos-io/mimikos/internal/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -70,7 +69,7 @@ func TestCorpusAccuracy(t *testing.T) {
 	require.NotEmpty(t, expectedFiles, "no expected classification files found")
 
 	p := parser.NewLibopenAPIParser(nil)
-	c := classifier.New()
+	c := New()
 
 	var (
 		totalCorrect int

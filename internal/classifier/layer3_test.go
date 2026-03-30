@@ -1,9 +1,8 @@
-package classifier_test
+package classifier
 
 import (
 	"testing"
 
-	"github.com/mimikos-io/mimikos/internal/classifier"
 	"github.com/mimikos-io/mimikos/internal/model"
 	"github.com/mimikos-io/mimikos/internal/parser"
 	"github.com/stretchr/testify/assert"
@@ -30,7 +29,7 @@ func TestTokenizeOperationID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := classifier.TokenizeOperationID(tt.opID)
+			got := TokenizeOperationID(tt.opID)
 			assert.Equal(t, tt.expect, got)
 		})
 	}
@@ -39,7 +38,7 @@ func TestTokenizeOperationID(t *testing.T) {
 // --- Layer 3: keyword matching on POST-to-item ---
 
 func TestLayer3_POST_Item_UpdateKeyword_OverridesToUpdate(t *testing.T) {
-	c := classifier.New()
+	c := New()
 
 	tests := []struct {
 		name        string
@@ -69,7 +68,7 @@ func TestLayer3_POST_Item_UpdateKeyword_OverridesToUpdate(t *testing.T) {
 }
 
 func TestLayer3_POST_Item_ActionKeyword_StaysGeneric(t *testing.T) {
-	c := classifier.New()
+	c := New()
 
 	tests := []struct {
 		name        string
@@ -96,7 +95,7 @@ func TestLayer3_POST_Item_ActionKeyword_StaysGeneric(t *testing.T) {
 }
 
 func TestLayer3_POST_Item_NoOperationID_StaysGeneric(t *testing.T) {
-	c := classifier.New()
+	c := New()
 	op := parser.Operation{
 		Method: "POST",
 		Path:   "/customers/{id}",
@@ -108,7 +107,7 @@ func TestLayer3_POST_Item_NoOperationID_StaysGeneric(t *testing.T) {
 }
 
 func TestLayer3_POST_Item_NoKeywordMatch_StaysGeneric(t *testing.T) {
-	c := classifier.New()
+	c := New()
 	op := parser.Operation{
 		Method:      "POST",
 		Path:        "/customers/{id}",
@@ -123,7 +122,7 @@ func TestLayer3_POST_Item_NoKeywordMatch_StaysGeneric(t *testing.T) {
 // --- Layer 3: keyword matching on other methods ---
 
 func TestLayer3_POST_Collection_CreateKeyword_ConfirmsCreate(t *testing.T) {
-	c := classifier.New()
+	c := New()
 	op := parser.Operation{
 		Method:      "POST",
 		Path:        "/users",
@@ -137,7 +136,7 @@ func TestLayer3_POST_Collection_CreateKeyword_ConfirmsCreate(t *testing.T) {
 }
 
 func TestLayer3_GET_Collection_ListKeyword_ConfirmsList(t *testing.T) {
-	c := classifier.New()
+	c := New()
 	op := parser.Operation{
 		Method:      "GET",
 		Path:        "/orders",
@@ -151,7 +150,7 @@ func TestLayer3_GET_Collection_ListKeyword_ConfirmsList(t *testing.T) {
 }
 
 func TestLayer3_GET_Item_FetchKeyword_ConfirmsFetch(t *testing.T) {
-	c := classifier.New()
+	c := New()
 	// "fetchUserById" — "fetch" is a CRUD keyword distinct from HTTP method "GET".
 	op := parser.Operation{
 		Method:      "GET",
@@ -166,7 +165,7 @@ func TestLayer3_GET_Item_FetchKeyword_ConfirmsFetch(t *testing.T) {
 }
 
 func TestLayer3_DELETE_Item_DeleteKeyword_ConfirmsDelete(t *testing.T) {
-	c := classifier.New()
+	c := New()
 	// "removeItem" — "remove" is a CRUD keyword distinct from HTTP method "DELETE".
 	op := parser.Operation{
 		Method:      "DELETE",
@@ -181,7 +180,7 @@ func TestLayer3_DELETE_Item_DeleteKeyword_ConfirmsDelete(t *testing.T) {
 }
 
 func TestLayer3_NoSignal_DoesNotChangeResult(t *testing.T) {
-	c := classifier.New()
+	c := New()
 	op := parser.Operation{
 		Method:      "POST",
 		Path:        "/shipping",
@@ -196,7 +195,7 @@ func TestLayer3_NoSignal_DoesNotChangeResult(t *testing.T) {
 // --- Layer 3: skips HTTP method token ---
 
 func TestLayer3_SkipsHTTPMethodToken(t *testing.T) {
-	c := classifier.New()
+	c := New()
 
 	// "GetChargesCharge" — "get" matches the HTTP method (GET), should be
 	// skipped so we don't produce a misleading fetch signal for a GET endpoint
