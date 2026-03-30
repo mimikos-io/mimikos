@@ -1,13 +1,7 @@
 package generator_test
 
 import (
-	"math"
-	"math/big"
-	"net"
-	"regexp"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/stretchr/testify/assert"
@@ -16,881 +10,1263 @@ import (
 	"github.com/mimikos-io/mimikos/internal/generator"
 )
 
-// --- Test helpers ---
+// --- Object generation tests (8.4.3) ---
 
-// ptr returns a pointer to v.
-func ptr[T any](v T) *T { return &v }
-
-// newRat creates a *big.Rat from an int64.
-func newRat(n int64) *big.Rat { return new(big.Rat).SetInt64(n) }
-
-// newRatF creates a *big.Rat from a float64.
-func newRatF(f float64) *big.Rat { return new(big.Rat).SetFloat64(f) }
-
-// newTypes creates a *jsonschema.Types from type name strings.
-func newTypes(types ...string) *jsonschema.Types {
-	var tt jsonschema.Types
-	for _, t := range types {
-		tt.Add(t)
-	}
-
-	return &tt
-}
-
-// newFormat creates a *jsonschema.Format with the given name.
-func newFormat(name string) *jsonschema.Format {
-	return &jsonschema.Format{Name: name}
-}
-
-// newEnum creates a *jsonschema.Enum with the given values.
-func newEnum(values ...any) *jsonschema.Enum {
-	return &jsonschema.Enum{Values: values}
-}
-
-// --- Primitive type tests (8.4.1) ---
-
-func TestGenerateStringBasic(t *testing.T) {
+func TestGenerateSimpleObject(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{Types: newTypes("string")}
+	g := generator.NewDataGenerator(nil, 0)
+	schema := objectSchema(map[string]*jsonschema.Schema{
+		"name": {Types: newTypes("string")},
+		"age":  {Types: newTypes("integer")},
+	}, "name", "age")
 
-	val, err := g.Generate(schema, 42, "")
+	val, err := g.Generate(schema, 42)
 	require.NoError(t, err)
 
-	s, ok := val.(string)
-	require.True(t, ok, "expected string, got %T", val)
-	assert.NotEmpty(t, s)
+	m, ok := val.(map[string]any)
+	require.True(t, ok, "expected map[string]any, got %T", val)
+	assert.Contains(t, m, "name")
+	assert.Contains(t, m, "age")
+	assert.IsType(t, "", m["name"])
+	assert.IsType(t, int64(0), m["age"])
 }
 
-func TestGenerateStringFormats(t *testing.T) {
+func TestGenerateObjectOptionalFieldsIncluded(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := generator.NewDataGenerator(nil, 0)
+	schema := objectSchema(map[string]*jsonschema.Schema{
+		"name": {Types: newTypes("string")},
+		"bio":  {Types: newTypes("string")},
+	}, "name") // only "name" is required
 
-	tests := []struct {
-		name   string
-		format string
-		check  func(t *testing.T, val string)
-	}{
-		{
-			name:   "email",
-			format: "email",
-			check: func(t *testing.T, val string) {
-				t.Helper()
-				assert.Contains(t, val, "@", "email must contain @")
-				assert.Contains(t, val, ".", "email must contain .")
-			},
-		},
-		{
-			name:   "uuid",
-			format: "uuid",
-			check: func(t *testing.T, val string) {
-				t.Helper()
-				uuidRe := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-				assert.Regexp(t, uuidRe, val)
-			},
-		},
-		{
-			name:   "date-time",
-			format: "date-time",
-			check: func(t *testing.T, val string) {
-				t.Helper()
-				_, err := time.Parse(time.RFC3339, val)
-				assert.NoError(t, err, "date-time must parse as RFC 3339")
-			},
-		},
-		{
-			name:   "date",
-			format: "date",
-			check: func(t *testing.T, val string) {
-				t.Helper()
-				_, err := time.Parse("2006-01-02", val)
-				assert.NoError(t, err, "date must parse as YYYY-MM-DD")
-			},
-		},
-		{
-			name:   "uri",
-			format: "uri",
-			check: func(t *testing.T, val string) {
-				t.Helper()
-				assert.True(t, strings.HasPrefix(val, "http://") || strings.HasPrefix(val, "https://"),
-					"uri must start with http(s)://")
-			},
-		},
-		{
-			name:   "hostname",
-			format: "hostname",
-			check: func(t *testing.T, val string) {
-				t.Helper()
-				assert.Contains(t, val, ".", "hostname must contain a dot")
-			},
-		},
-		{
-			name:   "ipv4",
-			format: "ipv4",
-			check: func(t *testing.T, val string) {
-				t.Helper()
-				ip := net.ParseIP(val)
-				assert.NotNil(t, ip, "must be valid IP")
-				assert.NotNil(t, ip.To4(), "must be IPv4")
-			},
-		},
-		{
-			name:   "ipv6",
-			format: "ipv6",
-			check: func(t *testing.T, val string) {
-				t.Helper()
-				ip := net.ParseIP(val)
-				assert.NotNil(t, ip, "must be valid IP")
-				assert.Contains(t, val, ":", "ipv6 must contain colons")
-			},
-		},
-		{
-			name:   "unknown-format-falls-through",
-			format: "x-custom-format",
-			check: func(t *testing.T, val string) {
-				t.Helper()
-				assert.NotEmpty(t, val, "unknown format should produce generic string")
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			schema := &jsonschema.Schema{
-				Types:  newTypes("string"),
-				Format: newFormat(tt.format),
-			}
-
-			val, err := g.Generate(schema, 12345, "")
-			require.NoError(t, err)
-
-			s, ok := val.(string)
-			require.True(t, ok, "expected string, got %T", val)
-			tt.check(t, s)
-		})
-	}
-}
-
-func TestGenerateIntegerBasic(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{Types: newTypes("integer")}
-
-	val, err := g.Generate(schema, 42, "")
+	val, err := g.Generate(schema, 42)
 	require.NoError(t, err)
 
-	_, ok := val.(int64)
-	assert.True(t, ok, "expected int64, got %T", val)
-}
-
-func TestGenerateNumberBasic(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{Types: newTypes("number")}
-
-	val, err := g.Generate(schema, 42, "")
-	require.NoError(t, err)
-
-	_, ok := val.(float64)
-	assert.True(t, ok, "expected float64, got %T", val)
-}
-
-func TestGenerateBooleanBasic(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{Types: newTypes("boolean")}
-
-	val, err := g.Generate(schema, 42, "")
-	require.NoError(t, err)
-
-	_, ok := val.(bool)
-	assert.True(t, ok, "expected bool, got %T", val)
-}
-
-func TestGenerateDeterminism(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-
-	tests := []struct {
-		name   string
-		schema *jsonschema.Schema
-	}{
-		{"string", &jsonschema.Schema{Types: newTypes("string")}},
-		{"integer", &jsonschema.Schema{Types: newTypes("integer")}},
-		{"number", &jsonschema.Schema{Types: newTypes("number")}},
-		{"boolean", &jsonschema.Schema{Types: newTypes("boolean")}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			const seed int64 = 99999
-
-			v1, err1 := g.Generate(tt.schema, seed, "")
-			require.NoError(t, err1)
-
-			v2, err2 := g.Generate(tt.schema, seed, "")
-			require.NoError(t, err2)
-
-			assert.Equal(t, v1, v2, "same seed must produce same value")
-		})
-	}
-}
-
-func TestGenerateDifferentiation(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{Types: newTypes("string")}
-
-	v1, err1 := g.Generate(schema, 1, "")
-	require.NoError(t, err1)
-
-	v2, err2 := g.Generate(schema, 2, "")
-	require.NoError(t, err2)
-
-	assert.NotEqual(t, v1, v2, "different seeds should produce different values")
-}
-
-// --- Constraint tests (8.4.2) ---
-
-func TestGenerateStringMinLength(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{
-		Types:     newTypes("string"),
-		MinLength: ptr(10),
-	}
-
-	val, err := g.Generate(schema, 42, "")
-	require.NoError(t, err)
-
-	s, ok := val.(string)
+	m, ok := val.(map[string]any)
 	require.True(t, ok)
-	assert.GreaterOrEqual(t, len(s), 10)
+	assert.Contains(t, m, "name", "required field must be present")
+	assert.Contains(t, m, "bio", "optional field should also be generated")
 }
 
-func TestGenerateStringMaxLength(t *testing.T) {
+func TestGenerateNestedObject(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{
-		Types:     newTypes("string"),
-		MaxLength: ptr(5),
-	}
-
-	val, err := g.Generate(schema, 42, "")
-	require.NoError(t, err)
-
-	s, ok := val.(string)
-	require.True(t, ok)
-	assert.LessOrEqual(t, len(s), 5)
-}
-
-func TestGenerateStringExactLength(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{
-		Types:     newTypes("string"),
-		MinLength: ptr(3),
-		MaxLength: ptr(3),
-	}
-
-	val, err := g.Generate(schema, 42, "")
-	require.NoError(t, err)
-
-	s, ok := val.(string)
-	require.True(t, ok)
-	assert.Len(t, s, 3)
-}
-
-func TestGenerateIntegerMinimum(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{
-		Types:   newTypes("integer"),
-		Minimum: newRat(100),
-	}
-
-	val, err := g.Generate(schema, 42, "")
-	require.NoError(t, err)
-
-	n, ok := val.(int64)
-	require.True(t, ok)
-	assert.GreaterOrEqual(t, n, int64(100))
-}
-
-func TestGenerateIntegerMaximum(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{
-		Types:   newTypes("integer"),
-		Maximum: newRat(10),
-	}
-
-	val, err := g.Generate(schema, 42, "")
-	require.NoError(t, err)
-
-	n, ok := val.(int64)
-	require.True(t, ok)
-	assert.LessOrEqual(t, n, int64(10))
-}
-
-func TestGenerateIntegerExclusiveMinimum(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{
-		Types:            newTypes("integer"),
-		ExclusiveMinimum: newRat(0),
-	}
-
-	val, err := g.Generate(schema, 42, "")
-	require.NoError(t, err)
-
-	n, ok := val.(int64)
-	require.True(t, ok)
-	assert.Positive(t, n)
-}
-
-func TestGenerateIntegerExclusiveMaximum(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{
-		Types:            newTypes("integer"),
-		ExclusiveMaximum: newRat(100),
-	}
-
-	val, err := g.Generate(schema, 42, "")
-	require.NoError(t, err)
-
-	n, ok := val.(int64)
-	require.True(t, ok)
-	assert.Less(t, n, int64(100))
-}
-
-func TestGenerateIntegerMinMax(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{
-		Types:   newTypes("integer"),
-		Minimum: newRat(5),
-		Maximum: newRat(10),
-	}
-
-	val, err := g.Generate(schema, 42, "")
-	require.NoError(t, err)
-
-	n, ok := val.(int64)
-	require.True(t, ok)
-	assert.GreaterOrEqual(t, n, int64(5))
-	assert.LessOrEqual(t, n, int64(10))
-}
-
-func TestGenerateIntegerMultipleOf(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{
-		Types:      newTypes("integer"),
-		MultipleOf: newRat(3),
-	}
-
-	val, err := g.Generate(schema, 42, "")
-	require.NoError(t, err)
-
-	n, ok := val.(int64)
-	require.True(t, ok)
-	assert.Equal(t, int64(0), n%3, "value %d must be a multiple of 3", n)
-}
-
-func TestGenerateIntegerMultipleOfWithMinimum(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{
-		Types:      newTypes("integer"),
-		MultipleOf: newRat(5),
-		Minimum:    newRat(12),
-	}
-
-	val, err := g.Generate(schema, 42, "")
-	require.NoError(t, err)
-
-	n, ok := val.(int64)
-	require.True(t, ok)
-	assert.GreaterOrEqual(t, n, int64(12))
-	assert.Equal(t, int64(0), n%5, "value %d must be a multiple of 5", n)
-}
-
-func TestGenerateNumberMinimum(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{
-		Types:   newTypes("number"),
-		Minimum: newRatF(1.5),
-	}
-
-	val, err := g.Generate(schema, 42, "")
-	require.NoError(t, err)
-
-	n, ok := val.(float64)
-	require.True(t, ok)
-	assert.GreaterOrEqual(t, n, 1.5)
-}
-
-func TestGenerateNumberMaximum(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{
-		Types:   newTypes("number"),
-		Maximum: newRatF(99.9),
-	}
-
-	val, err := g.Generate(schema, 42, "")
-	require.NoError(t, err)
-
-	n, ok := val.(float64)
-	require.True(t, ok)
-	assert.LessOrEqual(t, n, 99.9)
-}
-
-func TestGenerateNumberExclusiveMinimum(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{
-		Types:            newTypes("number"),
-		ExclusiveMinimum: newRatF(0.0),
-	}
-
-	val, err := g.Generate(schema, 42, "")
-	require.NoError(t, err)
-
-	n, ok := val.(float64)
-	require.True(t, ok)
-	assert.Greater(t, n, 0.0)
-}
-
-func TestGenerateNumberMultipleOf(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{
-		Types:      newTypes("number"),
-		MultipleOf: newRatF(0.25),
-	}
-
-	val, err := g.Generate(schema, 42, "")
-	require.NoError(t, err)
-
-	n, ok := val.(float64)
-	require.True(t, ok)
-
-	// Check that n / 0.25 is a whole number (within float epsilon).
-	quotient := n / 0.25
-	assert.InDelta(t, float64(int64(quotient)), quotient, 0.001,
-		"value %f must be a multiple of 0.25", n)
-}
-
-func TestGenerateEnumString(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{
-		Types: newTypes("string"),
-		Enum:  newEnum("active", "inactive", "pending"),
-	}
-
-	val, err := g.Generate(schema, 42, "")
-	require.NoError(t, err)
-
-	s, ok := val.(string)
-	require.True(t, ok)
-	assert.Contains(t, []string{"active", "inactive", "pending"}, s)
-}
-
-func TestGenerateEnumInteger(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-
-	t.Run("float64-values-from-JSON", func(t *testing.T) {
-		t.Parallel()
-
-		// JSON unmarshal produces float64 for all numbers.
-		schema := &jsonschema.Schema{
-			Types: newTypes("integer"),
-			Enum:  newEnum(float64(1), float64(2), float64(3)),
-		}
-
-		val, err := g.Generate(schema, 42, "")
-		require.NoError(t, err)
-
-		n, ok := val.(int64)
-		require.True(t, ok, "expected int64, got %T (%v)", val, val)
-		assert.Contains(t, []int64{1, 2, 3}, n)
+	g := generator.NewDataGenerator(nil, 0)
+	schema := objectSchema(map[string]*jsonschema.Schema{
+		"address": objectSchema(map[string]*jsonschema.Schema{
+			"city": {Types: newTypes("string")},
+			"zip":  {Types: newTypes("string")},
+		}),
 	})
 
-	t.Run("int-values-from-YAML", func(t *testing.T) {
-		t.Parallel()
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
 
-		// YAML unmarshal (go.yaml.in/yaml/v4) produces Go int for integers.
-		// This is what santhosh-tekuri/jsonschema stores when compiling from YAML.
-		schema := &jsonschema.Schema{
-			Types: newTypes("integer"),
-			Enum:  newEnum(1, 2, 3),
-		}
+	m, ok := val.(map[string]any)
+	require.True(t, ok, "expected map[string]any")
 
-		val, err := g.Generate(schema, 42, "")
+	addr, ok := m["address"].(map[string]any)
+	require.True(t, ok, "nested object should be map[string]any")
+	assert.Contains(t, addr, "city")
+	assert.Contains(t, addr, "zip")
+}
+
+func TestGenerateObjectPerFieldSubSeeding(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	schema := objectSchema(map[string]*jsonschema.Schema{
+		"name":  {Types: newTypes("string")},
+		"email": {Types: newTypes("string")},
+	})
+
+	val1, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	val2, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	// Same seed → identical output.
+	assert.Equal(t, val1, val2, "same seed must produce identical output")
+}
+
+func TestGenerateObjectFieldIndependence(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+
+	// Schema with two fields.
+	schema1 := objectSchema(map[string]*jsonschema.Schema{
+		"name": {Types: newTypes("string")},
+		"age":  {Types: newTypes("integer")},
+	})
+
+	// Schema with an extra field.
+	schema2 := objectSchema(map[string]*jsonschema.Schema{
+		"name": {Types: newTypes("string")},
+		"age":  {Types: newTypes("integer")},
+		"bio":  {Types: newTypes("string")},
+	})
+
+	val1, err := g.Generate(schema1, 42)
+	require.NoError(t, err)
+
+	val2, err := g.Generate(schema2, 42)
+	require.NoError(t, err)
+
+	m1, ok := val1.(map[string]any)
+	require.True(t, ok)
+
+	m2, ok := val2.(map[string]any)
+	require.True(t, ok)
+
+	// Adding "bio" should not change "name" or "age" values.
+	assert.Equal(t, m1["name"], m2["name"], "name should be field-independent")
+	assert.Equal(t, m1["age"], m2["age"], "age should be field-independent")
+}
+
+func TestGenerateEmptyObject(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	schema := objectSchema(map[string]*jsonschema.Schema{})
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	m, ok := val.(map[string]any)
+	require.True(t, ok)
+	assert.Empty(t, m)
+}
+
+func TestGenerateMapType(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	schema := &jsonschema.Schema{
+		Types:                newTypes("object"),
+		AdditionalProperties: &jsonschema.Schema{Types: newTypes("string")},
+	}
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	m, ok := val.(map[string]any)
+	require.True(t, ok)
+	assert.NotEmpty(t, m, "map-type schema should generate entries")
+
+	for k, v := range m {
+		assert.IsType(t, "", k, "keys should be strings")
+		assert.IsType(t, "", v, "values should be strings")
+	}
+}
+
+func TestGenerateObjectDeterminism(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	schema := objectSchema(map[string]*jsonschema.Schema{
+		"id":   {Types: newTypes("integer")},
+		"name": {Types: newTypes("string")},
+		"tags": {
+			Types:     newTypes("array"),
+			Items2020: &jsonschema.Schema{Types: newTypes("string")},
+		},
+	})
+
+	results := make([]any, 5)
+	for i := range results {
+		val, err := g.Generate(schema, 99)
 		require.NoError(t, err)
 
-		n, ok := val.(int64)
-		require.True(t, ok, "expected int64, got %T (%v)", val, val)
-		assert.Contains(t, []int64{1, 2, 3}, n)
-	})
-}
-
-func TestGenerateConst(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-	constVal := any("fixed-value")
-	schema := &jsonschema.Schema{
-		Const: &constVal,
+		results[i] = val
 	}
 
-	val, err := g.Generate(schema, 42, "")
-	require.NoError(t, err)
-	assert.Equal(t, "fixed-value", val)
+	for i := 1; i < len(results); i++ {
+		assert.Equal(t, results[0], results[i], "call %d should match call 0", i)
+	}
 }
 
-// --- Type inference tests ---
+// --- Array generation tests (8.4.3) ---
 
-func TestGenerateInferStringFromMinLength(t *testing.T) {
+func TestGenerateSimpleArray(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := generator.NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
-		MinLength: ptr(5),
+		Types:     newTypes("array"),
+		Items2020: &jsonschema.Schema{Types: newTypes("string")},
 	}
 
-	val, err := g.Generate(schema, 42, "")
+	val, err := g.Generate(schema, 42)
 	require.NoError(t, err)
 
-	s, ok := val.(string)
-	require.True(t, ok, "expected string from minLength hint, got %T", val)
-	assert.GreaterOrEqual(t, len(s), 5)
+	arr, ok := val.([]any)
+	require.True(t, ok, "expected []any, got %T", val)
+	assert.Len(t, arr, 3, "default array length should be 3")
+
+	for i, item := range arr {
+		assert.IsType(t, "", item, "item %d should be string", i)
+	}
 }
 
-func TestGenerateInferNumberFromMinimum(t *testing.T) {
+func TestGenerateArrayOfObjects(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := generator.NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
-		Minimum: newRat(0),
+		Types: newTypes("array"),
+		Items2020: objectSchema(map[string]*jsonschema.Schema{
+			"id":   {Types: newTypes("integer")},
+			"name": {Types: newTypes("string")},
+		}),
 	}
 
-	val, err := g.Generate(schema, 42, "")
+	val, err := g.Generate(schema, 42)
 	require.NoError(t, err)
 
-	_, ok := val.(float64)
-	assert.True(t, ok, "expected float64 from minimum hint, got %T", val)
+	arr, ok := val.([]any)
+	require.True(t, ok, "expected []any")
+	require.Len(t, arr, 3)
+
+	for i, item := range arr {
+		m, ok := item.(map[string]any)
+		require.True(t, ok, "item %d should be map", i)
+		assert.Contains(t, m, "id")
+		assert.Contains(t, m, "name")
+	}
 }
 
-func TestGenerateInferFromEnum(t *testing.T) {
+func TestGenerateArrayMinItems(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := generator.NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
-		Enum: newEnum("x", "y"),
+		Types:     newTypes("array"),
+		Items2020: &jsonschema.Schema{Types: newTypes("integer")},
+		MinItems:  ptr(5),
 	}
 
-	val, err := g.Generate(schema, 42, "")
+	val, err := g.Generate(schema, 42)
 	require.NoError(t, err)
-	assert.Contains(t, []string{"x", "y"}, val)
+
+	arr, ok := val.([]any)
+	require.True(t, ok, "expected []any")
+	assert.GreaterOrEqual(t, len(arr), 5)
 }
 
-func TestGenerateNoTypeNoHints(t *testing.T) {
+func TestGenerateArrayMaxItems(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{}
+	g := generator.NewDataGenerator(nil, 0)
+	schema := &jsonschema.Schema{
+		Types:     newTypes("array"),
+		Items2020: &jsonschema.Schema{Types: newTypes("integer")},
+		MaxItems:  ptr(2),
+	}
 
-	val, err := g.Generate(schema, 42, "")
+	val, err := g.Generate(schema, 42)
 	require.NoError(t, err)
 
-	_, ok := val.(string)
-	assert.True(t, ok, "expected string as default type, got %T", val)
+	arr, ok := val.([]any)
+	require.True(t, ok, "expected []any")
+	assert.LessOrEqual(t, len(arr), 2)
 }
 
-// --- Semantic integration tests (8.4.5) ---
-
-func TestGenerateSemanticEmail(t *testing.T) {
+func TestGenerateArrayMinMaxItems(t *testing.T) {
 	t.Parallel()
 
-	sm := generator.NewSemanticMapper()
-	g := generator.NewPrimitiveGenerator(sm)
-	schema := &jsonschema.Schema{Types: newTypes("string")}
+	g := generator.NewDataGenerator(nil, 0)
+	schema := &jsonschema.Schema{
+		Types:     newTypes("array"),
+		Items2020: &jsonschema.Schema{Types: newTypes("string")},
+		MinItems:  ptr(2),
+		MaxItems:  ptr(4),
+	}
 
-	val, err := g.Generate(schema, 42, "email")
+	val, err := g.Generate(schema, 42)
 	require.NoError(t, err)
 
-	s, ok := val.(string)
+	arr, ok := val.([]any)
+	require.True(t, ok, "expected []any")
+	assert.GreaterOrEqual(t, len(arr), 2)
+	assert.LessOrEqual(t, len(arr), 4)
+}
+
+func TestGenerateArrayUniqueItems(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	schema := &jsonschema.Schema{
+		Types: newTypes("array"),
+		Items2020: &jsonschema.Schema{
+			Types:   newTypes("integer"),
+			Minimum: newRat(0),
+			Maximum: newRat(1000),
+		},
+		MinItems:    ptr(5),
+		UniqueItems: true,
+	}
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	arr, ok := val.([]any)
+	require.True(t, ok, "expected []any")
+	require.GreaterOrEqual(t, len(arr), 5)
+
+	seen := make(map[any]bool, len(arr))
+	for _, item := range arr {
+		assert.False(t, seen[item], "duplicate item found: %v", item)
+		seen[item] = true
+	}
+}
+
+func TestGenerateArrayNoItemsSchema(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	schema := &jsonschema.Schema{
+		Types: newTypes("array"),
+	}
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	arr, ok := val.([]any)
 	require.True(t, ok)
-	assert.Contains(t, s, "@", "semantic email field should produce email-like value")
+	assert.Empty(t, arr)
 }
 
-func TestGenerateSemanticPrice(t *testing.T) {
+func TestGenerateArrayDraft07Items(t *testing.T) {
 	t.Parallel()
 
-	sm := generator.NewSemanticMapper()
-	g := generator.NewPrimitiveGenerator(sm)
-	schema := &jsonschema.Schema{Types: newTypes("number")}
-
-	val, err := g.Generate(schema, 42, "price")
-	require.NoError(t, err)
-
-	n, ok := val.(float64)
-	require.True(t, ok)
-	assert.Greater(t, n, 0.0, "price should be positive")
-}
-
-func TestGenerateSemanticTypeMismatchSkipped(t *testing.T) {
-	t.Parallel()
-
-	sm := generator.NewSemanticMapper()
-	g := generator.NewPrimitiveGenerator(sm)
-	// Schema is boolean, but field name "email" maps to string generator.
-	// Semantic match should be skipped due to type incompatibility.
-	schema := &jsonschema.Schema{Types: newTypes("boolean")}
-
-	val, err := g.Generate(schema, 42, "email")
-	require.NoError(t, err)
-
-	_, ok := val.(bool)
-	assert.True(t, ok, "type mismatch should fall through to boolean generation, got %T", val)
-}
-
-func TestGenerateNoFieldName(t *testing.T) {
-	t.Parallel()
-
-	sm := generator.NewSemanticMapper()
-	g := generator.NewPrimitiveGenerator(sm)
-	schema := &jsonschema.Schema{Types: newTypes("string")}
-
-	val, err := g.Generate(schema, 42, "")
-	require.NoError(t, err)
-
-	s, ok := val.(string)
-	require.True(t, ok)
-	// With no field name, should produce generic string (no @ from email).
-	// This is a probabilistic check — generic strings almost never contain @.
-	assert.NotEmpty(t, s)
-}
-
-func TestGenerateNilMapper(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{Types: newTypes("string")}
-
-	val, err := g.Generate(schema, 42, "email")
-	require.NoError(t, err)
-
-	_, ok := val.(string)
-	assert.True(t, ok, "nil mapper should produce generic string, got %T", val)
-}
-
-// --- Error case tests ---
-
-func TestGenerateUnsupportedTypes(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-
-	unsupported := []struct {
-		name   string
-		schema *jsonschema.Schema
-	}{
-		{"object", &jsonschema.Schema{Types: newTypes("object")}},
-		{"array", &jsonschema.Schema{Types: newTypes("array")}},
-		{"null", &jsonschema.Schema{Types: newTypes("null")}},
-	}
-
-	for _, tt := range unsupported {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			_, err := g.Generate(tt.schema, 42, "")
-			require.Error(t, err)
-			assert.ErrorIs(t, err, generator.ErrUnsupportedType)
-		})
-	}
-}
-
-// --- Enum determinism across seeds ---
-
-func TestGenerateEnumDeterministic(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
+	g := generator.NewDataGenerator(nil, 0)
+	itemSchema := &jsonschema.Schema{Types: newTypes("string")}
 	schema := &jsonschema.Schema{
-		Types: newTypes("string"),
-		Enum:  newEnum("a", "b", "c"),
+		Types: newTypes("array"),
+		Items: itemSchema, // draft-07 style: *Schema in Items field
 	}
 
-	const seed int64 = 777
-
-	v1, err := g.Generate(schema, seed, "")
+	val, err := g.Generate(schema, 42)
 	require.NoError(t, err)
 
-	v2, err := g.Generate(schema, seed, "")
-	require.NoError(t, err)
+	arr, ok := val.([]any)
+	require.True(t, ok)
+	assert.Len(t, arr, 3) // default length
 
-	assert.Equal(t, v1, v2, "enum selection must be deterministic for same seed")
+	for _, item := range arr {
+		assert.IsType(t, "", item)
+	}
 }
 
-func TestGenerateEnumVariation(t *testing.T) {
+func TestGenerateArrayPerItemSubSeeding(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := generator.NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
-		Types: newTypes("string"),
-		Enum:  newEnum("a", "b", "c", "d", "e"),
+		Types:     newTypes("array"),
+		Items2020: &jsonschema.Schema{Types: newTypes("string")},
+		MinItems:  ptr(3),
 	}
 
-	// With 5 enum values and many seeds, we should see at least 2 distinct values.
-	seen := make(map[any]bool)
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	arr, ok := val.([]any)
+	require.True(t, ok, "expected []any")
+	require.Len(t, arr, 3)
+
+	// Items should vary (different sub-seeds produce different values).
+	allSame := true
+
+	for i := 1; i < len(arr); i++ {
+		if arr[i] != arr[0] {
+			allSame = false
+
+			break
+		}
+	}
+
+	assert.False(t, allSame, "array items should vary across indices")
+}
+
+func TestGenerateArrayDeterminism(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	schema := &jsonschema.Schema{
+		Types:     newTypes("array"),
+		Items2020: &jsonschema.Schema{Types: newTypes("integer")},
+	}
+
+	val1, err := g.Generate(schema, 77)
+	require.NoError(t, err)
+
+	val2, err := g.Generate(schema, 77)
+	require.NoError(t, err)
+
+	assert.Equal(t, val1, val2)
+}
+
+// --- Polymorphism tests (8.4.4–8.4.5) ---
+
+func TestGenerateAllOfMergesProperties(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	schema := &jsonschema.Schema{
+		AllOf: []*jsonschema.Schema{
+			objectSchema(map[string]*jsonschema.Schema{
+				"firstName": {Types: newTypes("string")},
+			}),
+			objectSchema(map[string]*jsonschema.Schema{
+				"lastName": {Types: newTypes("string")},
+			}),
+		},
+	}
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	m, ok := val.(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, m, "firstName")
+	assert.Contains(t, m, "lastName")
+}
+
+func TestGenerateAllOfRequiredUnion(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	schema := &jsonschema.Schema{
+		AllOf: []*jsonschema.Schema{
+			{
+				Types:      newTypes("object"),
+				Properties: map[string]*jsonschema.Schema{"a": {Types: newTypes("string")}},
+				Required:   []string{"a"},
+			},
+			{
+				Types:      newTypes("object"),
+				Properties: map[string]*jsonschema.Schema{"b": {Types: newTypes("integer")}},
+				Required:   []string{"b"},
+			},
+		},
+	}
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	m, ok := val.(map[string]any)
+	require.True(t, ok, "expected map[string]any")
+	assert.Contains(t, m, "a")
+	assert.Contains(t, m, "b")
+}
+
+func TestGenerateAllOfLastWriteWins(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	schema := &jsonschema.Schema{
+		AllOf: []*jsonschema.Schema{
+			objectSchema(map[string]*jsonschema.Schema{
+				"x": {Types: newTypes("string")},
+			}),
+			objectSchema(map[string]*jsonschema.Schema{
+				"x": {Types: newTypes("integer")},
+			}),
+		},
+	}
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	m, ok := val.(map[string]any)
+	require.True(t, ok, "expected map[string]any")
+	// Second schema (integer) should win.
+	assert.IsType(t, int64(0), m["x"])
+}
+
+func TestGenerateAllOfWithTopLevelProperties(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	schema := &jsonschema.Schema{
+		Types: newTypes("object"),
+		Properties: map[string]*jsonschema.Schema{
+			"id": {Types: newTypes("integer")},
+		},
+		AllOf: []*jsonschema.Schema{
+			objectSchema(map[string]*jsonschema.Schema{
+				"name": {Types: newTypes("string")},
+			}),
+		},
+	}
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	m, ok := val.(map[string]any)
+	require.True(t, ok, "expected map[string]any")
+	assert.Contains(t, m, "id", "top-level property")
+	assert.Contains(t, m, "name", "allOf property")
+}
+
+func TestGenerateOneOfBranchSelection(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	schema := &jsonschema.Schema{
+		OneOf: []*jsonschema.Schema{
+			objectSchema(map[string]*jsonschema.Schema{
+				"catName": {Types: newTypes("string")},
+			}),
+			objectSchema(map[string]*jsonschema.Schema{
+				"dogName": {Types: newTypes("string")},
+			}),
+		},
+	}
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	m, ok := val.(map[string]any)
+	require.True(t, ok)
+
+	// Should have exactly one branch's properties.
+	hasCat := m["catName"] != nil
+	hasDog := m["dogName"] != nil
+	assert.True(t, hasCat || hasDog, "should have at least one branch")
+	assert.False(t, hasCat && hasDog, "should not have both branches")
+}
+
+func TestGenerateOneOfDeterminism(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	schema := &jsonschema.Schema{
+		OneOf: []*jsonschema.Schema{
+			objectSchema(map[string]*jsonschema.Schema{"a": {Types: newTypes("string")}}),
+			objectSchema(map[string]*jsonschema.Schema{"b": {Types: newTypes("string")}}),
+			objectSchema(map[string]*jsonschema.Schema{"c": {Types: newTypes("string")}}),
+		},
+	}
+
+	val1, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	val2, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	assert.Equal(t, val1, val2, "same seed must select same branch")
+}
+
+func TestGenerateOneOfVariation(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	schema := &jsonschema.Schema{
+		OneOf: []*jsonschema.Schema{
+			objectSchema(map[string]*jsonschema.Schema{"a": {Types: newTypes("string")}}),
+			objectSchema(map[string]*jsonschema.Schema{"b": {Types: newTypes("string")}}),
+			objectSchema(map[string]*jsonschema.Schema{"c": {Types: newTypes("string")}}),
+		},
+	}
+
+	// Try multiple seeds; at least two should produce different branches.
+	branches := make(map[string]bool)
 
 	for seed := int64(0); seed < 20; seed++ {
-		val, err := g.Generate(schema, seed, "")
+		val, err := g.Generate(schema, seed)
 		require.NoError(t, err)
 
-		seen[val] = true
+		m, ok := val.(map[string]any)
+		require.True(t, ok)
+
+		for k := range m {
+			branches[k] = true
+		}
 	}
 
-	assert.GreaterOrEqual(t, len(seen), 2, "enum should produce variation across seeds")
+	assert.Greater(t, len(branches), 1, "different seeds should select different branches")
+}
+
+func TestGenerateAnyOfBranchSelection(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	schema := &jsonschema.Schema{
+		AnyOf: []*jsonschema.Schema{
+			{Types: newTypes("string")},
+			{Types: newTypes("integer")},
+		},
+	}
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	isString := false
+	isInt := false
+
+	switch val.(type) {
+	case string:
+		isString = true
+	case int64:
+		isInt = true
+	}
+
+	assert.True(t, isString || isInt, "should produce string or integer")
+}
+
+func TestGenerateAnyOfDeterminism(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	schema := &jsonschema.Schema{
+		AnyOf: []*jsonschema.Schema{
+			{Types: newTypes("string")},
+			{Types: newTypes("integer")},
+		},
+	}
+
+	val1, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	val2, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	assert.Equal(t, val1, val2)
+}
+
+func TestGenerateAllOfWithNestedOneOf(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	schema := &jsonschema.Schema{
+		AllOf: []*jsonschema.Schema{
+			objectSchema(map[string]*jsonschema.Schema{
+				"id": {Types: newTypes("integer")},
+			}),
+			{
+				OneOf: []*jsonschema.Schema{
+					objectSchema(map[string]*jsonschema.Schema{
+						"type_a": {Types: newTypes("string")},
+					}),
+					objectSchema(map[string]*jsonschema.Schema{
+						"type_b": {Types: newTypes("string")},
+					}),
+				},
+			},
+		},
+	}
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	m, ok := val.(map[string]any)
+	require.True(t, ok, "expected map[string]any")
+	assert.Contains(t, m, "id", "allOf base property must be present")
+
+	// Should have one of the oneOf branches.
+	hasA := m["type_a"] != nil
+	hasB := m["type_b"] != nil
+	assert.True(t, hasA || hasB, "should have one branch from nested oneOf")
+}
+
+func TestGenerateEmptyAllOf(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	// Empty allOf slice is effectively a no-op — schema falls through to
+	// default type resolution (string). This matches JSON Schema semantics:
+	// allOf with zero sub-schemas imposes no constraints.
+	schema := &jsonschema.Schema{
+		AllOf: []*jsonschema.Schema{},
+	}
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+	assert.IsType(t, "", val, "empty allOf falls through to default string")
+}
+
+func TestGenerateEmptyOneOf(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	// Empty oneOf slice — same reasoning as empty allOf.
+	schema := &jsonschema.Schema{
+		OneOf: []*jsonschema.Schema{},
+	}
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+	assert.IsType(t, "", val, "empty oneOf falls through to default string")
+}
+
+// --- Circular reference tests (8.4.6–8.4.7) ---
+
+func TestGenerateSelfReferencingObject(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0) // default maxDepth = 3
+
+	// Build self-referencing schema: TreeNode { name: string, children: [TreeNode] }
+	node := &jsonschema.Schema{
+		Types: newTypes("object"),
+	}
+	node.Properties = map[string]*jsonschema.Schema{
+		"name": {Types: newTypes("string")},
+		"children": {
+			Types:     newTypes("array"),
+			Items2020: node, // circular reference
+		},
+	}
+
+	val, err := g.Generate(node, 42)
+	require.NoError(t, err)
+
+	// Should produce a tree that terminates.
+	m, ok := val.(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, m, "name")
+	assert.Contains(t, m, "children")
+}
+
+func TestGenerateDepth1Termination(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 1)
+	schema := objectSchema(map[string]*jsonschema.Schema{
+		"name": {Types: newTypes("string")},
+		"child": objectSchema(map[string]*jsonschema.Schema{
+			"inner": {Types: newTypes("string")},
+		}),
+	})
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	m, ok := val.(map[string]any)
+	require.True(t, ok, "expected map[string]any")
+	assert.Contains(t, m, "name")
+	// At depth 1, child object should be terminated (nil).
+	assert.Nil(t, m["child"], "nested object at depth limit should be nil")
+}
+
+func TestGenerateDefaultDepth3(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0) // default = 3
+
+	// Build 4-level nesting: L0 → L1 → L2 → L3.
+	schema := objectSchema(map[string]*jsonschema.Schema{
+		"l1": objectSchema(map[string]*jsonschema.Schema{
+			"l2": objectSchema(map[string]*jsonschema.Schema{
+				"l3": objectSchema(map[string]*jsonschema.Schema{
+					"deep": {Types: newTypes("string")},
+				}),
+			}),
+		}),
+	})
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	m, ok := val.(map[string]any)
+	require.True(t, ok, "expected map[string]any")
+
+	// L1 should be populated.
+	l1, ok := m["l1"].(map[string]any)
+	require.True(t, ok, "l1 should be a map")
+
+	// L2 should be populated.
+	l2, ok := l1["l2"].(map[string]any)
+	require.True(t, ok, "l2 should be a map")
+
+	// L3 should be terminated (nil) at depth 3.
+	assert.Nil(t, l2["l3"], "l3 should be nil at depth limit")
+}
+
+func TestGenerateArrayAtDepthLimit(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 1)
+	schema := objectSchema(map[string]*jsonschema.Schema{
+		"items": {
+			Types:     newTypes("array"),
+			Items2020: &jsonschema.Schema{Types: newTypes("string")},
+		},
+	})
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	m, ok := val.(map[string]any)
+	require.True(t, ok, "expected map[string]any")
+	arr, ok := m["items"].([]any)
+	require.True(t, ok, "array at depth limit should be empty []any")
+	assert.Empty(t, arr)
+}
+
+func TestGenerateCustomMaxDepth(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 5)
+
+	// 5-level nesting should all be populated.
+	schema := objectSchema(map[string]*jsonschema.Schema{
+		"l1": objectSchema(map[string]*jsonschema.Schema{
+			"l2": objectSchema(map[string]*jsonschema.Schema{
+				"l3": objectSchema(map[string]*jsonschema.Schema{
+					"l4": objectSchema(map[string]*jsonschema.Schema{
+						"l5": objectSchema(map[string]*jsonschema.Schema{
+							"deep": {Types: newTypes("string")},
+						}),
+					}),
+				}),
+			}),
+		}),
+	})
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	m, ok := val.(map[string]any)
+	require.True(t, ok, "expected map[string]any")
+	l1, ok := m["l1"].(map[string]any)
+	require.True(t, ok, "l1 should be map")
+
+	l2, ok := l1["l2"].(map[string]any)
+	require.True(t, ok, "l2 should be map")
+
+	l3, ok := l2["l3"].(map[string]any)
+	require.True(t, ok, "l3 should be map")
+
+	l4, ok := l3["l4"].(map[string]any)
+	require.True(t, ok, "l4 should be map")
+
+	// l5 should be nil at depth 5.
+	assert.Nil(t, l4["l5"], "l5 should be nil at depth limit 5")
+}
+
+func TestGenerateNonCircularStillLimited(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 2)
+
+	// 3 levels of non-circular nesting, maxDepth 2.
+	schema := objectSchema(map[string]*jsonschema.Schema{
+		"a": objectSchema(map[string]*jsonschema.Schema{
+			"b": objectSchema(map[string]*jsonschema.Schema{
+				"c": {Types: newTypes("string")},
+			}),
+		}),
+	})
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	m, ok := val.(map[string]any)
+	require.True(t, ok, "expected map[string]any")
+	a, ok := m["a"].(map[string]any)
+	require.True(t, ok, "a should be map")
+	assert.Nil(t, a["b"], "non-circular nesting still limited by maxDepth")
+}
+
+// --- Null handling tests ---
+
+func TestGenerateNullableObject(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	schema := &jsonschema.Schema{
+		Types: newTypes("object", "null"),
+		Properties: map[string]*jsonschema.Schema{
+			"name": {Types: newTypes("string")},
+		},
+	}
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	// Should generate the object, not nil.
+	m, ok := val.(map[string]any)
+	require.True(t, ok, "nullable object should generate as object")
+	assert.Contains(t, m, "name")
+}
+
+func TestGenerateNullableArray(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	schema := &jsonschema.Schema{
+		Types:     newTypes("array", "null"),
+		Items2020: &jsonschema.Schema{Types: newTypes("string")},
+	}
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	arr, ok := val.([]any)
+	require.True(t, ok, "nullable array should generate as array")
+	assert.NotEmpty(t, arr)
+}
+
+func TestGeneratePureNull(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	schema := &jsonschema.Schema{
+		Types: newTypes("null"),
+	}
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+	assert.Nil(t, val)
+}
+
+// --- Integration tests (8.4.8) ---
+
+func TestGenerateNestedObjectWithSemanticMapping(t *testing.T) {
+	t.Parallel()
+
+	sm := generator.NewSemanticMapper()
+	g := generator.NewDataGenerator(sm, 0)
+
+	schema := objectSchema(map[string]*jsonschema.Schema{
+		"user": objectSchema(map[string]*jsonschema.Schema{
+			"email": {Types: newTypes("string")},
+			"age":   {Types: newTypes("integer")},
+		}),
+	})
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	m, ok := val.(map[string]any)
+	require.True(t, ok, "expected map[string]any")
+	user, ok := m["user"].(map[string]any)
+	require.True(t, ok, "user should be map")
+
+	// Semantic mapper should produce an email-like value.
+	email, ok := user["email"].(string)
+	require.True(t, ok)
+	assert.Contains(t, email, "@", "email field should get semantic email value")
+
+	// Semantic mapper may return int (via gofakeit) rather than int64.
+	// Both are type-compatible with schema type "integer".
+	switch user["age"].(type) {
+	case int, int64:
+		// OK — both are valid integer representations.
+	default:
+		t.Errorf("age should be integer type, got %T", user["age"])
+	}
+}
+
+func TestGenerateArrayOfObjectsWithSemanticFields(t *testing.T) {
+	t.Parallel()
+
+	sm := generator.NewSemanticMapper()
+	g := generator.NewDataGenerator(sm, 0)
+
+	schema := &jsonschema.Schema{
+		Types: newTypes("array"),
+		Items2020: objectSchema(map[string]*jsonschema.Schema{
+			"id":   {Types: newTypes("integer")},
+			"name": {Types: newTypes("string")},
+		}),
+		MinItems: ptr(3),
+	}
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	arr, ok := val.([]any)
+	require.True(t, ok, "expected []any")
+	require.Len(t, arr, 3)
+
+	for i, item := range arr {
+		m, ok := item.(map[string]any)
+		require.True(t, ok, "item %d should be map", i)
+		assert.Contains(t, m, "id", "item %d must have id", i)
+		assert.Contains(t, m, "name", "item %d must have name", i)
+	}
+
+	// Items should vary (different seeds per index).
+	m0, ok := arr[0].(map[string]any)
+	require.True(t, ok)
+
+	m1, ok := arr[1].(map[string]any)
+	require.True(t, ok)
+	assert.NotEqual(t, m0["id"], m1["id"], "different items should have different ids")
+}
+
+func TestGenerateRealisticPetSchema(t *testing.T) {
+	t.Parallel()
+
+	sm := generator.NewSemanticMapper()
+	g := generator.NewDataGenerator(sm, 0)
+
+	schema := objectSchema(map[string]*jsonschema.Schema{
+		"id":   {Types: newTypes("integer")},
+		"name": {Types: newTypes("string")},
+		"tag":  {Types: newTypes("string")},
+		"address": objectSchema(map[string]*jsonschema.Schema{
+			"city":    {Types: newTypes("string")},
+			"country": {Types: newTypes("string")},
+		}),
+		"tags": {
+			Types:     newTypes("array"),
+			Items2020: &jsonschema.Schema{Types: newTypes("string")},
+			MaxItems:  ptr(3),
+		},
+	})
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	m, ok := val.(map[string]any)
+	require.True(t, ok, "expected map[string]any")
+
+	// All top-level fields present.
+	assert.Contains(t, m, "id")
+	assert.Contains(t, m, "name")
+	assert.Contains(t, m, "tag")
+	assert.Contains(t, m, "address")
+	assert.Contains(t, m, "tags")
+
+	// Nested address.
+	addr, ok := m["address"].(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, addr, "city")
+
+	// Tags array.
+	tags, ok := m["tags"].([]any)
+	require.True(t, ok)
+	assert.LessOrEqual(t, len(tags), 3)
+
+	// Determinism.
+	val2, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+	assert.Equal(t, val, val2)
+}
+
+func TestGenerateRefFollowing(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+
+	// Target schema (what the $ref points to).
+	target := objectSchema(map[string]*jsonschema.Schema{
+		"name": {Types: newTypes("string")},
+	})
+
+	// Schema with Ref set (simulating a resolved $ref).
+	schema := &jsonschema.Schema{
+		Ref: target,
+	}
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	m, ok := val.(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, m, "name")
+}
+
+func TestGeneratePrimitiveThroughDataGenerator(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+
+	// String schema.
+	val, err := g.Generate(&jsonschema.Schema{Types: newTypes("string")}, 42)
+	require.NoError(t, err)
+	assert.IsType(t, "", val)
+
+	// Integer schema.
+	val, err = g.Generate(&jsonschema.Schema{Types: newTypes("integer")}, 42)
+	require.NoError(t, err)
+	assert.IsType(t, int64(0), val)
+
+	// Boolean schema.
+	val, err = g.Generate(&jsonschema.Schema{Types: newTypes("boolean")}, 42)
+	require.NoError(t, err)
+	assert.IsType(t, true, val)
 }
 
 // --- Review regression tests ---
 
-// B1: absModLen must not panic on math.MinInt64 (two's complement overflow).
-func TestGenerateEnumMinInt64Seed(t *testing.T) {
+// B1 regression: circular allOf/oneOf must terminate, not stack overflow.
+func TestGenerateCircularAllOfTerminates(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
+	g := generator.NewDataGenerator(nil, 0)
+
+	// SchemaA.allOf → SchemaB, SchemaB.allOf → SchemaA (mutual cycle via $ref).
+	schemaA := &jsonschema.Schema{}
+	schemaB := &jsonschema.Schema{}
+
+	schemaA.AllOf = []*jsonschema.Schema{{Ref: schemaB}}
+	schemaB.AllOf = []*jsonschema.Schema{{Ref: schemaA}}
+
+	// Must terminate (not panic with stack overflow).
+	val, err := g.Generate(schemaA, 42)
+	require.NoError(t, err)
+
+	// At depth limit, allOf with no resolvable properties produces empty map.
+	_ = val // any result is acceptable — the test is that it terminates.
+}
+
+func TestGenerateCircularOneOfTerminates(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+
+	// Self-referencing oneOf: Discount = oneOf [ {props: {name}}, $ref Discount ]
+	discount := &jsonschema.Schema{}
+	discount.OneOf = []*jsonschema.Schema{
+		objectSchema(map[string]*jsonschema.Schema{
+			"name": {Types: newTypes("string")},
+		}),
+		{Ref: discount},
+	}
+
+	val, err := g.Generate(discount, 42)
+	require.NoError(t, err)
+	assert.NotNil(t, val, "should produce a value, not nil")
+}
+
+// B2 regression: sibling oneOf blocks within separate allOf entries must
+// be able to select different branches (not correlated by shared seed).
+func TestGenerateAllOfSiblingOneOfIndependentSeeds(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
-		Types: newTypes("string"),
-		Enum:  newEnum("a", "b", "c"),
+		AllOf: []*jsonschema.Schema{
+			{
+				OneOf: []*jsonschema.Schema{
+					objectSchema(map[string]*jsonschema.Schema{"v1a": {Types: newTypes("string")}}),
+					objectSchema(map[string]*jsonschema.Schema{"v1b": {Types: newTypes("string")}}),
+				},
+			},
+			{
+				OneOf: []*jsonschema.Schema{
+					objectSchema(map[string]*jsonschema.Schema{"v2a": {Types: newTypes("string")}}),
+					objectSchema(map[string]*jsonschema.Schema{"v2b": {Types: newTypes("string")}}),
+				},
+			},
+		},
 	}
 
-	// math.MinInt64 caused negation overflow in the original absModLen:
-	// -MinInt64 == MinInt64 in two's complement, producing a negative index.
-	val, err := g.Generate(schema, math.MinInt64, "")
-	require.NoError(t, err)
+	// Try multiple seeds. With independent sub-schema seeds, the two oneOf
+	// blocks should sometimes select different indices.
+	sawDifferentBranches := false
 
-	s, ok := val.(string)
-	require.True(t, ok)
-	assert.Contains(t, []string{"a", "b", "c"}, s)
+	for seed := int64(0); seed < 30; seed++ {
+		val, err := g.Generate(schema, seed)
+		require.NoError(t, err)
+
+		m, ok := val.(map[string]any)
+		require.True(t, ok)
+
+		// Check which branch was selected for each oneOf.
+		first := m["v1a"] != nil  // index 0 selected for first oneOf
+		second := m["v2a"] != nil // index 0 selected for second oneOf
+
+		if first != second {
+			sawDifferentBranches = true
+
+			break
+		}
+	}
+
+	assert.True(t, sawDifferentBranches,
+		"sibling oneOf blocks should be able to select different branches")
 }
 
-// B3: Format strings must respect maxLength when the constraint is present.
-func TestGenerateFormatRespectsMaxLength(t *testing.T) {
+// NB4: tuple arrays (prefixItems) should produce per-position typed items.
+func TestGenerateTupleArray(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
-
-	tests := []struct {
-		name      string
-		format    string
-		maxLength int
-	}{
-		{"email-truncated", "email", 15},
-		{"uuid-truncated", "uuid", 20},
-		{"uri-truncated", "uri", 25},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			schema := &jsonschema.Schema{
-				Types:     newTypes("string"),
-				Format:    newFormat(tt.format),
-				MaxLength: ptr(tt.maxLength),
-			}
-
-			val, err := g.Generate(schema, 42, "")
-			require.NoError(t, err)
-
-			s, ok := val.(string)
-			require.True(t, ok)
-			assert.LessOrEqual(t, len(s), tt.maxLength,
-				"format %q must respect maxLength %d, got len=%d", tt.format, tt.maxLength, len(s))
-		})
-	}
-}
-
-// NB3: maxLength: 0 must produce empty string (LetterN(0) returns 1 char).
-func TestGenerateStringMaxLengthZero(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
+	g := generator.NewDataGenerator(nil, 0)
 	schema := &jsonschema.Schema{
-		Types:     newTypes("string"),
-		MaxLength: ptr(0),
+		Types: newTypes("array"),
+		PrefixItems: []*jsonschema.Schema{
+			{Types: newTypes("string")},
+			{Types: newTypes("integer")},
+			{Types: newTypes("boolean")},
+		},
 	}
 
-	val, err := g.Generate(schema, 42, "")
+	val, err := g.Generate(schema, 42)
 	require.NoError(t, err)
 
-	s, ok := val.(string)
+	arr, ok := val.([]any)
+	require.True(t, ok, "expected []any")
+	require.Len(t, arr, 3, "tuple should have one item per prefixItems schema")
+
+	assert.IsType(t, "", arr[0], "position 0 should be string")
+	assert.IsType(t, int64(0), arr[1], "position 1 should be integer")
+	assert.IsType(t, true, arr[2], "position 2 should be boolean")
+}
+
+func TestGenerateTupleArrayDeterminism(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	schema := &jsonschema.Schema{
+		Types: newTypes("array"),
+		PrefixItems: []*jsonschema.Schema{
+			{Types: newTypes("string")},
+			{Types: newTypes("number")},
+		},
+	}
+
+	val1, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	val2, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	assert.Equal(t, val1, val2, "tuple generation should be deterministic")
+}
+
+// NB6: boolean additionalProperties should produce empty object.
+func TestGenerateAdditionalPropertiesFalse(t *testing.T) {
+	t.Parallel()
+
+	g := generator.NewDataGenerator(nil, 0)
+	schema := &jsonschema.Schema{
+		Types:                newTypes("object"),
+		AdditionalProperties: false,
+	}
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	m, ok := val.(map[string]any)
 	require.True(t, ok)
-	assert.Empty(t, s, "maxLength: 0 must produce empty string")
+	assert.Empty(t, m, "additionalProperties: false with no properties → empty object")
 }
 
-// NB6: Nullable type ["string", "null"] must generate string, not error.
-func TestGenerateNullableString(t *testing.T) {
+func TestGenerateAdditionalPropertiesTrue(t *testing.T) {
 	t.Parallel()
 
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{Types: newTypes("string", "null")}
+	g := generator.NewDataGenerator(nil, 0)
+	schema := &jsonschema.Schema{
+		Types:                newTypes("object"),
+		AdditionalProperties: true,
+	}
 
-	val, err := g.Generate(schema, 42, "")
+	val, err := g.Generate(schema, 42)
 	require.NoError(t, err)
 
-	_, ok := val.(string)
-	assert.True(t, ok, "nullable string should generate string, got %T", val)
-}
-
-// NB6: Nullable type ["integer", "null"] must generate integer, not error.
-func TestGenerateNullableInteger(t *testing.T) {
-	t.Parallel()
-
-	g := generator.NewPrimitiveGenerator(nil)
-	schema := &jsonschema.Schema{Types: newTypes("integer", "null")}
-
-	val, err := g.Generate(schema, 42, "")
-	require.NoError(t, err)
-
-	_, ok := val.(int64)
-	assert.True(t, ok, "nullable integer should generate int64, got %T", val)
+	m, ok := val.(map[string]any)
+	require.True(t, ok)
+	assert.Empty(t, m,
+		"additionalProperties: true with no schema → empty object (nothing to generate)")
 }

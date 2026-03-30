@@ -1,120 +1,449 @@
 // Package generator implements deterministic, schema-aware data generation
 // for Mimikos mock responses. It provides request fingerprinting, per-field
-// sub-seeding, semantic field-name mapping, and primitive type generation as
-// the foundation for producing realistic, reproducible API response data.
+// sub-seeding, semantic field-name mapping, and schema-complete data generation
+// as the foundation for producing realistic, reproducible API response data.
 //
 // The generation pipeline:
 //
-//	Request → Fingerprint → FieldSeed (per field) → SemanticMapper / Faker → value
+//	Request → Fingerprint → DataGenerator.Generate(schema, seed) → response payload
+//	  └── per field: FieldSeed → SemanticMapper / PrimitiveGenerator → value
 //
 // All outputs are deterministic: identical requests always produce identical
 // response data across process restarts.
 package generator
 
 import (
-	"errors"
-	"math"
-	"math/big"
+	"fmt"
+	"reflect"
+	"sort"
+	"strconv"
 
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-// ErrUnsupportedType is returned when Generate is called with a schema whose
-// resolved type is not a primitive (object, array, or null).
-var ErrUnsupportedType = errors.New("unsupported schema type for primitive generation")
+// defaultMaxDepth is the maximum recursion depth for nested object/array
+// generation. Three levels covers the vast majority of real API schemas.
+const defaultMaxDepth = 3
 
-// JSON Schema type name constants.
-const (
-	typeString  = "string"
-	typeInteger = "integer"
-	typeNumber  = "number"
-	typeBoolean = "boolean"
-	typeNull    = "null"
+// defaultArrayLen is the number of items generated for arrays when no
+// minItems/maxItems constraints are specified.
+const defaultArrayLen = 3
 
-	// defaultStringLen is the default length for generated strings when no
-	// constraints are specified.
-	defaultStringLen = 8
+// mapEntryCount is the number of entries generated for map-type schemas
+// (object with additionalProperties but no defined properties).
+const mapEntryCount = 3
 
-	// defaultIntMin and defaultIntMax bound integer generation when no
-	// constraints are specified.
-	defaultIntMin = 0
-	defaultIntMax = 10000
+// mapKeyLen is the length of generated map keys for map-type schemas.
+const mapKeyLen = 6
 
-	// defaultNumMin and defaultNumMax bound number generation when no
-	// constraints are specified.
-	defaultNumMin = 0.0
-	defaultNumMax = 10000.0
-	// exclusiveEpsilon is the small nudge applied to exclusive bounds to avoid
-	// generating values exactly at the boundary.
-	exclusiveEpsilon = 0.01
-)
+// maxUniqueRetries caps the number of retry attempts per item when
+// uniqueItems is required and a duplicate is generated.
+const maxUniqueRetries = 10
 
-// PrimitiveGenerator produces deterministic values for JSON Schema primitive
-// types (string, integer, number, boolean). Generic generation satisfies
-// schema constraints (minLength, maximum, enum, format, etc.). Format-specific
-// strings are truncated to maxLength when the constraint is present.
+// DataGenerator produces deterministic, schema-complete response data by
+// walking a JSON Schema tree. It delegates primitive leaf generation to
+// [PrimitiveGenerator] and handles object properties, array items,
+// polymorphism (allOf/oneOf/anyOf), and circular reference termination.
 //
-// When a semantic mapper is provided and the field name matches a known
-// pattern, the semantic value is used if it satisfies the schema type.
-// Semantic values bypass schema constraints — the field-name intent takes
-// precedence over constraint satisfaction for mock data realism.
-// The caller (typically the DataGenerator) may post-validate if needed.
-type PrimitiveGenerator struct {
-	semantic *SemanticMapper
+// Depth tracking prevents infinite recursion for both circular schemas and
+// deeply nested structures. Objects at the depth limit produce nil (JSON null).
+// Arrays at the depth limit produce empty slices (JSON []). Polymorphism
+// keywords (allOf/oneOf/anyOf) each consume one depth level to ensure
+// circular polymorphic references terminate.
+//
+// All outputs are deterministic: identical schemas with identical seeds
+// always produce identical data structures.
+type DataGenerator struct {
+	primitive *PrimitiveGenerator
+	maxDepth  int
 }
 
-// NewPrimitiveGenerator creates a generator with the given semantic mapper.
-// If semantic is nil, all generation uses generic constraint-aware logic.
-func NewPrimitiveGenerator(semantic *SemanticMapper) *PrimitiveGenerator {
-	return &PrimitiveGenerator{semantic: semantic}
+// NewDataGenerator creates a generator with the given semantic mapper and
+// maximum recursion depth. If maxDepth is 0, the default (3) is used.
+func NewDataGenerator(semantic *SemanticMapper, maxDepth int) *DataGenerator {
+	if maxDepth <= 0 {
+		maxDepth = defaultMaxDepth
+	}
+
+	return &DataGenerator{
+		primitive: NewPrimitiveGenerator(semantic),
+		maxDepth:  maxDepth,
+	}
 }
 
-// Generate produces a deterministic value for a JSON Schema primitive type.
-// The schema parameter provides type and constraint information. The seed
-// controls deterministic output. The fieldName enables semantic matching.
-//
-// Returns the generated value and nil error on success. Returns
-// [ErrUnsupportedType] if the schema type is not a supported primitive
-// (object, array, null).
-func (g *PrimitiveGenerator) Generate(schema *jsonschema.Schema, seed int64, fieldName string) (any, error) {
-	// 1. Const short-circuit.
-	if schema.Const != nil {
-		return *schema.Const, nil
+// Generate produces a complete data structure for the given schema.
+// The seed controls deterministic output. Returns the generated value
+// (map[string]any for objects, []any for arrays, or a primitive) and
+// nil error on success.
+func (g *DataGenerator) Generate(schema *jsonschema.Schema, seed int64) (any, error) {
+	return g.generate(schema, seed, "", 0)
+}
+
+// generate is the recursive core. It resolves $ref, polymorphism, and type
+// dispatch, threading depth for circular reference termination.
+func (g *DataGenerator) generate(schema *jsonschema.Schema, seed int64, fieldName string, depth int) (any, error) {
+	if schema == nil {
+		return nil, nil //nolint:nilnil // nil schema produces nil value
 	}
 
-	// 2. Enum short-circuit.
-	if schema.Enum != nil && len(schema.Enum.Values) > 0 {
-		return g.generateEnum(schema, seed)
+	// 1. Follow $ref — alias, does not increment depth.
+	if schema.Ref != nil {
+		return g.generate(schema.Ref, seed, fieldName, depth)
 	}
 
-	typ := resolveType(schema)
+	// 2. Const / enum short-circuit (delegate to primitive).
+	if schema.Const != nil || (schema.Enum != nil && len(schema.Enum.Values) > 0) {
+		return g.primitive.Generate(schema, seed, fieldName)
+	}
 
-	// 3. Semantic mapper — try before generic generation.
-	if fieldName != "" && g.semantic != nil {
-		if val, ok := g.trySemanticMatch(fieldName, typ, seed); ok {
+	// 3. Polymorphism — checked before type dispatch.
+	// Each polymorphism keyword consumes one depth level to prevent
+	// infinite recursion on circular allOf/oneOf/anyOf chains.
+	if len(schema.AllOf) > 0 {
+		return g.generateAllOf(schema, seed, depth+1)
+	}
+
+	if len(schema.OneOf) > 0 {
+		return g.generateBranch(schema.OneOf, seed, fieldName, depth+1)
+	}
+
+	if len(schema.AnyOf) > 0 {
+		return g.generateBranch(schema.AnyOf, seed, fieldName, depth+1)
+	}
+
+	// 4. Type dispatch.
+	typ := resolveComplexType(schema)
+
+	switch typ {
+	case typeObject:
+		if depth >= g.maxDepth {
+			return nil, nil //nolint:nilnil // depth termination — nil is the documented sentinel
+		}
+
+		return g.generateObject(schema, seed, depth)
+	case typeArray:
+		if depth >= g.maxDepth {
+			return []any{}, nil // depth termination — empty array
+		}
+
+		return g.generateArray(schema, seed, depth)
+	case typeNull:
+		return nil, nil //nolint:nilnil // null type produces nil
+	default:
+		// Primitive types: string, integer, number, boolean.
+		return g.primitive.Generate(schema, seed, fieldName)
+	}
+}
+
+// --- Object generation ---
+
+// generateObject produces a map[string]any with all defined properties.
+// Properties are iterated in sorted order for deterministic output.
+func (g *DataGenerator) generateObject(schema *jsonschema.Schema, seed int64, depth int) (map[string]any, error) {
+	// Map-type schema: no defined properties, but additionalProperties is a schema.
+	if len(schema.Properties) == 0 {
+		if addlSchema, ok := schema.AdditionalProperties.(*jsonschema.Schema); ok {
+			return g.generateMapEntries(addlSchema, seed, depth)
+		}
+
+		return map[string]any{}, nil
+	}
+
+	// Collect and sort property names for deterministic iteration.
+	names := make([]string, 0, len(schema.Properties))
+	for name := range schema.Properties {
+		names = append(names, name)
+	}
+
+	sort.Strings(names)
+
+	result := make(map[string]any, len(names))
+
+	for _, name := range names {
+		propSchema := schema.Properties[name]
+		fieldSeed := FieldSeed(seed, name)
+
+		val, err := g.generate(propSchema, fieldSeed, name, depth+1)
+		if err != nil {
+			return nil, fmt.Errorf("property %q: %w", name, err)
+		}
+
+		result[name] = val
+	}
+
+	return result, nil
+}
+
+// generateMapEntries produces a small number of entries for map-type schemas
+// (object with additionalProperties but no defined properties).
+func (g *DataGenerator) generateMapEntries(
+	valueSchema *jsonschema.Schema, seed int64, depth int,
+) (map[string]any, error) {
+	result := make(map[string]any, mapEntryCount)
+
+	for i := range mapEntryCount {
+		keyPath := fmt.Sprintf("_key_%d", i)
+		keySeed := FieldSeed(seed, keyPath)
+		keyFaker := gofakeit.New(uint64(keySeed)) //nolint:gosec // intentional bit-cast for seeding
+		key := keyFaker.LetterN(mapKeyLen)
+
+		valPath := fmt.Sprintf("_val_%d", i)
+		valSeed := FieldSeed(seed, valPath)
+
+		val, err := g.generate(valueSchema, valSeed, "", depth+1)
+		if err != nil {
+			return nil, fmt.Errorf("map entry %d: %w", i, err)
+		}
+
+		result[key] = val
+	}
+
+	return result, nil
+}
+
+// --- Array generation ---
+
+// generateArray produces a []any with items generated from the item schema.
+// Tuple schemas (prefixItems or draft-04 Items as []*Schema) generate
+// per-position items from the corresponding schema.
+func (g *DataGenerator) generateArray(schema *jsonschema.Schema, seed int64, depth int) ([]any, error) {
+	// Tuple schemas: per-position item schemas.
+	if tupleSchemas := resolveTupleSchemas(schema); len(tupleSchemas) > 0 {
+		return g.generateTuple(tupleSchemas, seed, depth)
+	}
+
+	// Homogeneous arrays: single item schema for all items.
+	itemSchema := resolveItemSchema(schema)
+	if itemSchema == nil {
+		return []any{}, nil
+	}
+
+	length := arrayLength(schema)
+
+	items := make([]any, 0, length)
+
+	for i := range length {
+		itemSeed := FieldSeed(seed, strconv.Itoa(i))
+
+		item, err := g.generate(itemSchema, itemSeed, "", depth+1)
+		if err != nil {
+			return nil, fmt.Errorf("array item %d: %w", i, err)
+		}
+
+		if schema.UniqueItems && containsValue(items, item) {
+			item, err = g.retryUniqueItem(itemSchema, seed, i, items, depth)
+			if err != nil {
+				return nil, fmt.Errorf("array item %d unique retry: %w", i, err)
+			}
+		}
+
+		items = append(items, item)
+	}
+
+	return items, nil
+}
+
+// generateTuple produces a []any with per-position items from the given
+// schemas (one schema per array position).
+func (g *DataGenerator) generateTuple(
+	schemas []*jsonschema.Schema, seed int64, depth int,
+) ([]any, error) {
+	items := make([]any, 0, len(schemas))
+
+	for i, itemSchema := range schemas {
+		itemSeed := FieldSeed(seed, strconv.Itoa(i))
+
+		val, err := g.generate(itemSchema, itemSeed, "", depth+1)
+		if err != nil {
+			return nil, fmt.Errorf("tuple item %d: %w", i, err)
+		}
+
+		items = append(items, val)
+	}
+
+	return items, nil
+}
+
+// retryUniqueItem generates alternative values for a duplicate array item.
+// Returns the first unique value found, or the last attempt if all retries
+// produce duplicates (best-effort). Propagates generation errors.
+func (g *DataGenerator) retryUniqueItem(
+	itemSchema *jsonschema.Schema,
+	seed int64,
+	index int,
+	existing []any,
+	depth int,
+) (any, error) {
+	var lastCandidate any
+
+	for attempt := 1; attempt <= maxUniqueRetries; attempt++ {
+		retrySeed := FieldSeed(seed, fmt.Sprintf("%d_retry_%d", index, attempt))
+
+		candidate, err := g.generate(itemSchema, retrySeed, "", depth+1)
+		if err != nil {
+			return nil, fmt.Errorf("retry %d: %w", attempt, err)
+		}
+
+		if !containsValue(existing, candidate) {
+			return candidate, nil
+		}
+
+		lastCandidate = candidate
+	}
+
+	// Best-effort: return last attempt even if duplicate.
+	return lastCandidate, nil
+}
+
+// containsValue checks if items contains val using deep equality.
+func containsValue(items []any, val any) bool {
+	for _, existing := range items {
+		if reflect.DeepEqual(existing, val) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// resolveTupleSchemas returns per-position schemas for tuple-style arrays
+// (prefixItems or draft-04 Items as []*Schema). Returns nil for homogeneous
+// arrays.
+func resolveTupleSchemas(schema *jsonschema.Schema) []*jsonschema.Schema {
+	// Draft 2020-12 tuple.
+	if len(schema.PrefixItems) > 0 {
+		return schema.PrefixItems
+	}
+
+	// Draft-04 style tuple: Items is []*Schema.
+	if schema.Items != nil {
+		if schemas, ok := schema.Items.([]*jsonschema.Schema); ok && len(schemas) > 0 {
+			return schemas
+		}
+	}
+
+	return nil
+}
+
+// resolveItemSchema extracts the single item schema for homogeneous arrays.
+// Returns nil if no item schema is defined. Tuple schemas are handled
+// separately by resolveTupleSchemas.
+func resolveItemSchema(schema *jsonschema.Schema) *jsonschema.Schema {
+	// Draft 2020-12.
+	if schema.Items2020 != nil {
+		return schema.Items2020
+	}
+
+	// Draft-07 style: Items as *Schema (single schema for all items).
+	if schema.Items != nil {
+		if s, ok := schema.Items.(*jsonschema.Schema); ok {
+			return s
+		}
+	}
+
+	return nil
+}
+
+// arrayLength computes the target array length from minItems/maxItems.
+func arrayLength(schema *jsonschema.Schema) int {
+	length := defaultArrayLen
+
+	if schema.MinItems != nil && *schema.MinItems > length {
+		length = *schema.MinItems
+	}
+
+	if schema.MaxItems != nil && *schema.MaxItems < length {
+		length = *schema.MaxItems
+	}
+
+	return length
+}
+
+// --- Polymorphism ---
+
+// generateAllOf merges data from all sub-schemas. If the parent schema has
+// top-level properties, they are generated first as the base. Returns nil
+// when depth limit is reached (circular allOf termination).
+func (g *DataGenerator) generateAllOf(schema *jsonschema.Schema, seed int64, depth int) (any, error) {
+	if depth >= g.maxDepth {
+		return nil, nil //nolint:nilnil // depth termination for circular allOf
+	}
+
+	if len(schema.AllOf) == 0 {
+		return nil, nil //nolint:nilnil // empty allOf
+	}
+
+	result := make(map[string]any)
+
+	// Generate top-level properties first (if any).
+	if len(schema.Properties) > 0 {
+		base, err := g.generateObject(schema, seed, depth)
+		if err != nil {
+			return nil, err
+		}
+
+		mergeMaps(result, base)
+	}
+
+	// Merge each allOf sub-schema. Each sub-schema gets a unique seed
+	// derived from its index so sibling oneOf blocks within separate allOf
+	// entries can select different branches independently.
+	for i, sub := range schema.AllOf {
+		subSeed := FieldSeed(seed, fmt.Sprintf("_allOf_%d", i))
+
+		val, err := g.generate(sub, subSeed, "", depth)
+		if err != nil {
+			return nil, err
+		}
+
+		if m, ok := val.(map[string]any); ok {
+			mergeMaps(result, m)
+		} else if val != nil {
+			// Non-object allOf (rare: e.g., allOf with a single primitive constraint).
 			return val, nil
 		}
 	}
 
-	// 4. Type-specific generation.
-	switch typ {
-	case typeString:
-		return g.generateString(schema, seed), nil
-	case typeInteger:
-		return g.generateInteger(schema, seed), nil
-	case typeNumber:
-		return g.generateNumber(schema, seed), nil
-	case typeBoolean:
-		return g.generateBoolean(seed), nil
-	default:
-		return nil, ErrUnsupportedType
+	return result, nil
+}
+
+// generateBranch selects one branch deterministically from oneOf or anyOf.
+// Returns nil when depth limit is reached (circular oneOf/anyOf termination).
+func (g *DataGenerator) generateBranch(
+	schemas []*jsonschema.Schema, seed int64, fieldName string, depth int,
+) (any, error) {
+	if depth >= g.maxDepth {
+		return nil, nil //nolint:nilnil // depth termination for circular oneOf/anyOf
+	}
+
+	if len(schemas) == 0 {
+		return nil, nil //nolint:nilnil // empty oneOf/anyOf
+	}
+
+	idx := absModLen(seed, len(schemas))
+
+	return g.generate(schemas[idx], seed, fieldName, depth)
+}
+
+// mergeMaps copies all entries from src into dst (last-write-wins).
+func mergeMaps(dst, src map[string]any) {
+	for k, v := range src {
+		dst[k] = v
 	}
 }
 
-// resolveType determines the JSON Schema type from the schema definition.
-// Priority: explicit type → infer from constraints → default "string".
-func resolveType(schema *jsonschema.Schema) string {
+// --- Type resolution ---
+
+// JSON Schema type name constants for complex types.
+const (
+	typeObject = "object"
+	typeArray  = "array"
+)
+
+// resolveComplexType determines the JSON Schema type, including object and
+// array. Falls back to resolveType() for primitive type inference.
+func resolveComplexType(schema *jsonschema.Schema) string {
 	// Explicit type declared.
 	if schema.Types != nil {
 		for _, t := range schema.Types.ToStrings() {
@@ -126,315 +455,21 @@ func resolveType(schema *jsonschema.Schema) string {
 		return typeNull
 	}
 
-	// Infer from constraints.
-	if schema.MinLength != nil || schema.MaxLength != nil || schema.Pattern != nil {
-		return typeString
+	// Infer from structural signals.
+	if len(schema.Properties) > 0 {
+		return typeObject
 	}
 
-	if schema.Minimum != nil || schema.Maximum != nil ||
-		schema.ExclusiveMinimum != nil || schema.ExclusiveMaximum != nil ||
-		schema.MultipleOf != nil {
-		return typeNumber
-	}
-
-	// Default to string.
-	return typeString
-}
-
-// generateEnum selects a deterministic value from the enum list.
-// For integer-typed schemas, the selected value is normalized to int64
-// regardless of the source Go type (int from YAML unmarshal, float64 from
-// JSON unmarshal).
-func (g *PrimitiveGenerator) generateEnum(schema *jsonschema.Schema, seed int64) (any, error) {
-	values := schema.Enum.Values
-	idx := absModLen(seed, len(values))
-	val := values[idx]
-
-	// Normalize numeric enum values to int64 for integer-typed schemas.
-	typ := resolveType(schema)
-	if typ == typeInteger {
-		switch n := val.(type) {
-		case int:
-			return int64(n), nil
-		case int64:
-			return n, nil
-		case float64:
-			return int64(n), nil
+	if schema.AdditionalProperties != nil {
+		if _, ok := schema.AdditionalProperties.(*jsonschema.Schema); ok {
+			return typeObject
 		}
 	}
 
-	return val, nil
-}
-
-// trySemanticMatch attempts to use the semantic mapper for the given field name.
-// Returns the value and true if a type-compatible semantic match was found.
-func (g *PrimitiveGenerator) trySemanticMatch(fieldName, typ string, seed int64) (any, bool) {
-	fn, ok := g.semantic.Match(fieldName)
-	if !ok {
-		return nil, false
+	if schema.Items2020 != nil || schema.Items != nil || len(schema.PrefixItems) > 0 {
+		return typeArray
 	}
 
-	faker := gofakeit.New(uint64(seed)) //nolint:gosec // intentional bit-cast for seeding
-	val := fn(faker)
-
-	if typeCompatible(val, typ) {
-		return val, true
-	}
-
-	return nil, false
-}
-
-// typeCompatible checks whether a Go value is compatible with the target
-// JSON Schema type.
-func typeCompatible(val any, schemaType string) bool {
-	switch schemaType {
-	case typeString:
-		_, ok := val.(string)
-
-		return ok
-	case typeInteger:
-		switch v := val.(type) {
-		case int:
-			return true
-		case int64:
-			return true
-		case float64:
-			return v == math.Trunc(v)
-		default:
-			return false
-		}
-	case typeNumber:
-		switch val.(type) {
-		case int, int64, float64:
-			return true
-		default:
-			return false
-		}
-	case typeBoolean:
-		_, ok := val.(bool)
-
-		return ok
-	default:
-		return false
-	}
-}
-
-// generateString produces a deterministic string value respecting format and
-// length constraints. Format-specific strings (email, uuid, etc.) are
-// truncated to maxLength when the constraint is present.
-func (g *PrimitiveGenerator) generateString(schema *jsonschema.Schema, seed int64) string {
-	// Format-specific generation with length enforcement.
-	if schema.Format != nil {
-		if s, ok := generateStringFormat(schema.Format.Name, seed); ok {
-			if schema.MaxLength != nil && len(s) > *schema.MaxLength {
-				s = s[:*schema.MaxLength]
-			}
-
-			return s
-		}
-	}
-
-	// Compute target length from constraints.
-	length := defaultStringLen
-	if schema.MinLength != nil && *schema.MinLength > length {
-		length = *schema.MinLength
-	}
-
-	if schema.MaxLength != nil && *schema.MaxLength < length {
-		length = *schema.MaxLength
-	}
-
-	// Short-circuit for maxLength: 0 — LetterN(0) returns 1 char (NB3).
-	if length == 0 {
-		return ""
-	}
-
-	faker := gofakeit.New(uint64(seed)) //nolint:gosec // intentional bit-cast for seeding
-
-	return faker.LetterN(uint(length)) //nolint:gosec // length is always non-negative
-}
-
-// generateStringFormat produces a string value for a known JSON Schema format.
-// Returns the value and true if the format is recognized, or ("", false) for
-// unknown formats.
-func generateStringFormat(format string, seed int64) (string, bool) {
-	faker := gofakeit.New(uint64(seed)) //nolint:gosec // intentional bit-cast for seeding
-
-	switch format {
-	case "email":
-		return faker.Email(), true
-	case "uuid":
-		return faker.UUID(), true
-	case "date-time":
-		return faker.Date().Format("2006-01-02T15:04:05Z"), true
-	case "date":
-		return faker.Date().Format("2006-01-02"), true
-	case "uri", "uri-reference", "iri", "iri-reference":
-		return faker.URL(), true
-	case "hostname":
-		return faker.DomainName(), true
-	case "ipv4":
-		return faker.IPv4Address(), true
-	case "ipv6":
-		return faker.IPv6Address(), true
-	default:
-		return "", false
-	}
-}
-
-// generateInteger produces a deterministic integer value respecting min, max,
-// exclusiveMin, exclusiveMax, and multipleOf constraints.
-func (g *PrimitiveGenerator) generateInteger(schema *jsonschema.Schema, seed int64) int64 {
-	minVal := int64(defaultIntMin)
-	maxVal := int64(defaultIntMax)
-
-	if schema.Minimum != nil {
-		minVal = ratToInt64(schema.Minimum)
-	}
-
-	if schema.ExclusiveMinimum != nil {
-		exMin := ratToInt64(schema.ExclusiveMinimum) + 1
-		if exMin > minVal {
-			minVal = exMin
-		}
-	}
-
-	if schema.Maximum != nil {
-		maxVal = ratToInt64(schema.Maximum)
-	}
-
-	if schema.ExclusiveMaximum != nil {
-		exMax := ratToInt64(schema.ExclusiveMaximum) - 1
-		if exMax < maxVal {
-			maxVal = exMax
-		}
-	}
-
-	if minVal > maxVal {
-		maxVal = minVal
-	}
-
-	faker := gofakeit.New(uint64(seed)) //nolint:gosec // intentional bit-cast for seeding
-	val := int64(faker.IntRange(int(minVal), int(maxVal)))
-
-	// Snap to multipleOf if specified.
-	if schema.MultipleOf != nil {
-		mult := ratToInt64(schema.MultipleOf)
-		if mult > 0 {
-			val = snapToMultiple(val, mult, minVal, maxVal)
-		}
-	}
-
-	return val
-}
-
-// snapToMultiple adjusts val to be a multiple of mult within [minVal, maxVal].
-func snapToMultiple(val, mult, minVal, maxVal int64) int64 {
-	// Round down to nearest multiple.
-	result := (val / mult) * mult
-
-	// Ensure >= minVal.
-	if result < minVal {
-		// Round up to the next multiple at or above minVal.
-		result = ((minVal + mult - 1) / mult) * mult
-	}
-
-	// Ensure <= maxVal.
-	if result > maxVal {
-		result = (maxVal / mult) * mult
-	}
-
-	return result
-}
-
-// generateNumber produces a deterministic float64 value respecting numeric
-// constraints.
-func (g *PrimitiveGenerator) generateNumber(schema *jsonschema.Schema, seed int64) float64 {
-	minVal := defaultNumMin
-	maxVal := defaultNumMax
-
-	if schema.Minimum != nil {
-		minVal = ratToFloat64(schema.Minimum)
-	}
-
-	if schema.ExclusiveMinimum != nil {
-		exMin := ratToFloat64(schema.ExclusiveMinimum) + exclusiveEpsilon
-		if exMin > minVal {
-			minVal = exMin
-		}
-	}
-
-	if schema.Maximum != nil {
-		maxVal = ratToFloat64(schema.Maximum)
-	}
-
-	if schema.ExclusiveMaximum != nil {
-		exMax := ratToFloat64(schema.ExclusiveMaximum) - exclusiveEpsilon
-		if exMax < maxVal {
-			maxVal = exMax
-		}
-	}
-
-	if minVal > maxVal {
-		maxVal = minVal
-	}
-
-	faker := gofakeit.New(uint64(seed)) //nolint:gosec // intentional bit-cast for seeding
-	val := faker.Float64Range(minVal, maxVal)
-
-	// Snap to multipleOf if specified.
-	if schema.MultipleOf != nil {
-		mult := ratToFloat64(schema.MultipleOf)
-		if mult > 0 {
-			val = snapToMultipleFloat(val, mult, minVal, maxVal)
-		}
-	}
-
-	return val
-}
-
-// snapToMultipleFloat adjusts val to be a multiple of mult within
-// [minVal, maxVal].
-func snapToMultipleFloat(val, mult, minVal, maxVal float64) float64 {
-	result := math.Round(val/mult) * mult
-
-	if result < minVal {
-		result = math.Ceil(minVal/mult) * mult
-	}
-
-	if result > maxVal {
-		result = math.Floor(maxVal/mult) * mult
-	}
-
-	return result
-}
-
-// --- Boolean generation ---
-
-func (g *PrimitiveGenerator) generateBoolean(seed int64) bool {
-	faker := gofakeit.New(uint64(seed)) //nolint:gosec // intentional bit-cast for seeding
-
-	return faker.Bool()
-}
-
-// --- Helpers ---
-
-// ratToFloat64 converts a *big.Rat to float64.
-func ratToFloat64(r *big.Rat) float64 {
-	f, _ := r.Float64()
-
-	return f
-}
-
-// ratToInt64 converts a *big.Rat to int64 via integer division.
-func ratToInt64(r *big.Rat) int64 {
-	// Use Num/Denom for integer division — truncates toward zero.
-	return r.Num().Int64() / r.Denom().Int64()
-}
-
-// absModLen returns a non-negative index derived from seed modulo length.
-// Uses unsigned conversion to avoid two's complement overflow on math.MinInt64
-// (where -MinInt64 == MinInt64, producing a negative result with signed negation).
-func absModLen(seed int64, length int) int {
-	return int(uint64(seed) % uint64(length)) //nolint:gosec // result always fits in int since length is int
+	// Fall back to primitive type inference.
+	return resolveType(schema)
 }
