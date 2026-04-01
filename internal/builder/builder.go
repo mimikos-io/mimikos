@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"sort"
 
 	"github.com/mimikos-io/mimikos/internal/classifier"
 	"github.com/mimikos-io/mimikos/internal/compiler"
@@ -95,24 +94,16 @@ func buildEntry(
 	// Step 1: Classify.
 	result := cls.Classify(op)
 
-	// Step 2: Infer scenarios.
-	scenarios := classifier.InferScenarios(result.Type)
-
-	// Step 3: Determine success code.
+	// Step 2: Determine success code.
 	successCode := selectSuccessCode(op.Responses, result.Type)
 
-	// Step 4: Collect error codes.
-	errorCodes := collectErrorCodes(op.Responses)
+	// Step 3: Build response schemas map and compile schemas.
+	var requestSchema *model.CompiledSchema
 
-	// Step 5: Compile schemas.
-	var (
-		requestSchema   *model.CompiledSchema
-		responseSchemas map[int]*model.CompiledSchema
-	)
+	responseSchemas := buildResponseSchemas(op, sc, logger)
 
 	if sc != nil {
 		requestSchema = compileRequestSchema(op, sc, logger)
-		responseSchemas = compileResponseSchemas(op, sc, logger)
 	}
 
 	return model.BehaviorEntry{
@@ -120,9 +111,7 @@ func buildEntry(
 		Method:          op.Method,
 		PathPattern:     op.Path,
 		Type:            result.Type,
-		Scenarios:       scenarios,
 		SuccessCode:     successCode,
-		ErrorCodes:      errorCodes,
 		RequestSchema:   requestSchema,
 		ResponseSchemas: responseSchemas,
 		Source:          model.SourceHeuristic,
@@ -182,22 +171,6 @@ func preferredSuccessCode(bt model.BehaviorType) int {
 	return http.StatusOK
 }
 
-// collectErrorCodes returns all 4xx/5xx status codes from the response map,
-// sorted in ascending order for deterministic output.
-func collectErrorCodes(responses map[int]*parser.Response) []int {
-	var codes []int
-
-	for code := range responses {
-		if code >= http.StatusBadRequest {
-			codes = append(codes, code)
-		}
-	}
-
-	sort.Ints(codes)
-
-	return codes
-}
-
 // compileRequestSchema compiles the request body schema, if present.
 func compileRequestSchema(
 	op parser.Operation,
@@ -226,9 +199,13 @@ func compileRequestSchema(
 	return compiled
 }
 
-// compileResponseSchemas compiles all response schemas (including default)
-// into a map keyed by status code. The default response uses key 0.
-func compileResponseSchemas(
+// buildResponseSchemas builds the response schemas map from an operation's
+// responses. Every response defined in the spec gets a key in the map:
+// compiled schema if it has one, nil if it doesn't (preserving "this status
+// code exists" information). The default response uses key 0.
+// When sc is nil, schema compilation is skipped but status code presence
+// is still recorded.
+func buildResponseSchemas(
 	op parser.Operation,
 	sc *compiler.SchemaCompiler,
 	logger *slog.Logger,
@@ -236,22 +213,26 @@ func compileResponseSchemas(
 	var schemas map[int]*model.CompiledSchema
 
 	for code, resp := range op.Responses {
-		if resp == nil || resp.Schema == nil {
+		if resp == nil {
+			continue
+		}
+
+		if schemas == nil {
+			schemas = make(map[int]*model.CompiledSchema)
+		}
+
+		if resp.Schema == nil || sc == nil {
+			schemas[code] = nil
+
 			continue
 		}
 
 		compiled := compileSchema(sc, resp.Schema, op, logger)
-		if compiled != nil {
-			if schemas == nil {
-				schemas = make(map[int]*model.CompiledSchema)
-			}
-
-			schemas[code] = compiled
-		}
+		schemas[code] = compiled
 	}
 
 	// Default response at key 0.
-	if op.DefaultResponse != nil && op.DefaultResponse.Schema != nil {
+	if op.DefaultResponse != nil && op.DefaultResponse.Schema != nil && sc != nil {
 		compiled := compileSchema(sc, op.DefaultResponse.Schema, op, logger)
 		if compiled != nil {
 			if schemas == nil {

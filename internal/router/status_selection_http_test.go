@@ -24,9 +24,9 @@ func scenarioBehaviorMap() *model.BehaviorMap {
 		Method:      http.MethodGet,
 		PathPattern: "/pets/{petId}",
 		Type:        model.BehaviorFetch,
-		Scenarios:   []model.Scenario{model.ScenarioSuccess, model.ScenarioNotFound},
+
 		SuccessCode: http.StatusOK,
-		ErrorCodes:  []int{http.StatusNotFound},
+
 		ResponseSchemas: map[int]*model.CompiledSchema{
 			http.StatusOK:       {Name: "Pet", Schema: petObjectSchema()},
 			http.StatusNotFound: {Name: "Error", Schema: petObjectSchema()},
@@ -39,9 +39,9 @@ func scenarioBehaviorMap() *model.BehaviorMap {
 		Method:      http.MethodPost,
 		PathPattern: "/pets",
 		Type:        model.BehaviorCreate,
-		Scenarios:   []model.Scenario{model.ScenarioSuccess, model.ScenarioValidationError},
+
 		SuccessCode: http.StatusCreated,
-		ErrorCodes:  []int{http.StatusBadRequest},
+
 		ResponseSchemas: map[int]*model.CompiledSchema{
 			http.StatusCreated:    {Name: "Pet", Schema: petObjectSchema()},
 			http.StatusBadRequest: {Name: "ValidationError", Schema: petObjectSchema()},
@@ -54,7 +54,7 @@ func scenarioBehaviorMap() *model.BehaviorMap {
 		Method:      http.MethodGet,
 		PathPattern: "/pets",
 		Type:        model.BehaviorList,
-		Scenarios:   []model.Scenario{model.ScenarioSuccess},
+
 		SuccessCode: http.StatusOK,
 		ResponseSchemas: map[int]*model.CompiledSchema{
 			http.StatusOK: {Name: "PetList", Schema: petArraySchema()},
@@ -68,11 +68,12 @@ func scenarioBehaviorMap() *model.BehaviorMap {
 		Method:      http.MethodGet,
 		PathPattern: "/toys/{toyId}",
 		Type:        model.BehaviorFetch,
-		Scenarios:   []model.Scenario{model.ScenarioSuccess, model.ScenarioNotFound},
+
 		SuccessCode: http.StatusOK,
-		ErrorCodes:  []int{http.StatusNotFound},
+
 		ResponseSchemas: map[int]*model.CompiledSchema{
-			http.StatusOK: {Name: "Toy", Schema: petObjectSchema()},
+			http.StatusOK:       {Name: "Toy", Schema: petObjectSchema()},
+			http.StatusNotFound: nil, // defined in spec but no schema
 		},
 		Source:     model.SourceHeuristic,
 		Confidence: 0.9,

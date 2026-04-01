@@ -39,7 +39,7 @@ func behaviorMapWithSchema(sch *jsonschema.Schema) *model.BehaviorMap {
 		Method:      http.MethodGet,
 		PathPattern: "/items/{id}",
 		Type:        model.BehaviorFetch,
-		Scenarios:   []model.Scenario{model.ScenarioSuccess},
+
 		SuccessCode: http.StatusOK,
 		ResponseSchemas: map[int]*model.CompiledSchema{
 			http.StatusOK: {Name: "Item", Schema: sch},
@@ -136,10 +136,10 @@ func TestResponseValidation_NilSchema_SkipsValidation(t *testing.T) {
 	// Entry with no response schema — validation should be skipped.
 	bm := model.NewBehaviorMap()
 	bm.Put(model.BehaviorEntry{
-		Method:          http.MethodGet,
-		PathPattern:     "/empty",
-		Type:            model.BehaviorFetch,
-		Scenarios:       []model.Scenario{model.ScenarioSuccess},
+		Method:      http.MethodGet,
+		PathPattern: "/empty",
+		Type:        model.BehaviorFetch,
+
 		SuccessCode:     http.StatusOK,
 		ResponseSchemas: map[int]*model.CompiledSchema{},
 		Source:          model.SourceHeuristic,
@@ -161,10 +161,10 @@ func TestResponseValidation_NilSchema_SkipsValidation(t *testing.T) {
 func TestResponseValidation_204NoContent_SkipsValidation(t *testing.T) {
 	bm := model.NewBehaviorMap()
 	bm.Put(model.BehaviorEntry{
-		Method:          http.MethodDelete,
-		PathPattern:     "/items/{id}",
-		Type:            model.BehaviorDelete,
-		Scenarios:       []model.Scenario{model.ScenarioSuccess},
+		Method:      http.MethodDelete,
+		PathPattern: "/items/{id}",
+		Type:        model.BehaviorDelete,
+
 		SuccessCode:     http.StatusNoContent,
 		ResponseSchemas: map[int]*model.CompiledSchema{},
 		Source:          model.SourceHeuristic,

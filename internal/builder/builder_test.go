@@ -75,10 +75,8 @@ func TestBuildBehaviorMap_ListOperation(t *testing.T) {
 	entry, ok := bm.Get(http.MethodGet, "/pets")
 	require.True(t, ok)
 	assert.Equal(t, model.BehaviorList, entry.Type)
-	assert.Equal(t, []model.Scenario{model.ScenarioSuccess}, entry.Scenarios)
 	assert.Equal(t, http.StatusOK, entry.SuccessCode)
 	assert.Equal(t, model.SourceHeuristic, entry.Source)
-	assert.Empty(t, entry.ErrorCodes)
 }
 
 func TestBuildBehaviorMap_CreateOperation(t *testing.T) {
@@ -105,8 +103,9 @@ func TestBuildBehaviorMap_CreateOperation(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, model.BehaviorCreate, entry.Type)
 	assert.Equal(t, http.StatusCreated, entry.SuccessCode)
-	assert.Equal(t, []model.Scenario{model.ScenarioSuccess, model.ScenarioValidationError}, entry.Scenarios)
-	assert.Equal(t, []int{http.StatusBadRequest}, entry.ErrorCodes)
+	// Error code 400 should be present as a key in ResponseSchemas (nil value = no schema).
+	_, has400 := entry.ResponseSchemas[http.StatusBadRequest]
+	assert.True(t, has400, "400 should be present in ResponseSchemas")
 }
 
 func TestBuildBehaviorMap_DeletePrefers204(t *testing.T) {
@@ -131,7 +130,9 @@ func TestBuildBehaviorMap_DeletePrefers204(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, model.BehaviorDelete, entry.Type)
 	assert.Equal(t, http.StatusNoContent, entry.SuccessCode)
-	assert.Equal(t, []int{http.StatusNotFound}, entry.ErrorCodes)
+	// Error code 404 should be present as a key in ResponseSchemas (nil value = no schema).
+	_, has404 := entry.ResponseSchemas[http.StatusNotFound]
+	assert.True(t, has404, "404 should be present in ResponseSchemas")
 }
 
 func TestBuildBehaviorMap_NoResponsesDefaultsTo200(t *testing.T) {
@@ -255,10 +256,14 @@ func TestBuildBehaviorMap_NilCompilerSkipsSchemas(t *testing.T) {
 	entry, ok := bm.Get(http.MethodGet, "/pets")
 	require.True(t, ok)
 	assert.Nil(t, entry.RequestSchema, "request schema should be nil when compiler is nil")
-	assert.Nil(t, entry.ResponseSchemas, "response schemas should be nil when compiler is nil")
+	// ResponseSchemas has keys for defined status codes, but values are nil when compiler is nil.
+	require.NotNil(t, entry.ResponseSchemas, "response schemas map should exist for defined status codes")
+	assert.Nil(t, entry.ResponseSchemas[http.StatusOK], "schema value should be nil when compiler is nil")
 }
 
-func TestBuildBehaviorMap_ErrorCodesSorted(t *testing.T) {
+func TestBuildBehaviorMap_SchemalessResponsesAsNilEntries(t *testing.T) {
+	// Responses defined with no schema should appear as nil values in
+	// ResponseSchemas, preserving "this status code exists" information.
 	spec := &parser.ParsedSpec{
 		Operations: []parser.Operation{
 			{
@@ -266,9 +271,9 @@ func TestBuildBehaviorMap_ErrorCodesSorted(t *testing.T) {
 				Path:   "/pets/{petId}",
 				Responses: map[int]*parser.Response{
 					http.StatusOK:                  {StatusCode: http.StatusOK},
-					http.StatusInternalServerError: {StatusCode: http.StatusInternalServerError},
 					http.StatusBadRequest:          {StatusCode: http.StatusBadRequest},
 					http.StatusNotFound:            {StatusCode: http.StatusNotFound},
+					http.StatusInternalServerError: {StatusCode: http.StatusInternalServerError},
 				},
 			},
 		},
@@ -279,12 +284,16 @@ func TestBuildBehaviorMap_ErrorCodesSorted(t *testing.T) {
 
 	entry, ok := bm.Get(http.MethodPut, "/pets/{petId}")
 	require.True(t, ok)
-	// Error codes should be deterministically sorted.
-	assert.Equal(t, []int{
-		http.StatusBadRequest,
-		http.StatusNotFound,
-		http.StatusInternalServerError,
-	}, entry.ErrorCodes)
+
+	// All four schema-less responses should be present as keys with nil values.
+	for _, code := range []int{
+		http.StatusOK, http.StatusBadRequest,
+		http.StatusNotFound, http.StatusInternalServerError,
+	} {
+		schema, exists := entry.ResponseSchemas[code]
+		assert.True(t, exists, "status %d should be present in ResponseSchemas", code)
+		assert.Nil(t, schema, "status %d should have nil schema (no schema defined)", code)
+	}
 }
 
 func TestBuildBehaviorMap_ConfidencePreserved(t *testing.T) {
@@ -569,10 +578,11 @@ func TestBuildBehaviorMap_SchemaCompilationFailureIsResilient(t *testing.T) {
 	require.NotNil(t, petEntry.ResponseSchemas)
 	assert.NotNil(t, petEntry.ResponseSchemas[http.StatusOK])
 
-	// Second operation has a failed schema — nil in response schemas.
+	// Second operation has a failed schema — status code present, schema value nil.
 	dogEntry, ok := bm.Get(http.MethodGet, "/dogs")
 	require.True(t, ok)
-	assert.Nil(t, dogEntry.ResponseSchemas, "failed schema should result in nil response schemas")
+	require.NotNil(t, dogEntry.ResponseSchemas, "response schemas map should exist for defined status codes")
+	assert.Nil(t, dogEntry.ResponseSchemas[http.StatusOK], "failed schema compilation should result in nil value")
 }
 
 func TestBuildBehaviorMap_OperationIDPreserved(t *testing.T) {
@@ -696,7 +706,11 @@ func TestCorpusBuildBehaviorMap(t *testing.T) {
 			}
 
 			// Count compiled schemas (response + request).
-			schemaCount += len(entry.ResponseSchemas)
+			for _, cs := range entry.ResponseSchemas {
+				if cs != nil {
+					schemaCount++
+				}
+			}
 
 			if entry.RequestSchema != nil {
 				schemaCount++
