@@ -47,33 +47,13 @@ func TestParseBehaviorType(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidBehaviorType)
 }
 
-func TestScenario_String(t *testing.T) {
-	tests := []struct {
-		s    Scenario
-		want string
-	}{
-		{ScenarioSuccess, "success"},
-		{ScenarioValidationError, "validation_error"},
-		{ScenarioNotFound, "not_found"},
-	}
-	for _, tt := range tests {
-		assert.Equal(t, tt.want, tt.s.String(), "Scenario.String() for %v", tt.s)
-	}
-}
-
-func TestScenario_IsValid(t *testing.T) {
-	assert.True(t, ScenarioSuccess.IsValid())
-	assert.True(t, ScenarioNotFound.IsValid())
-	assert.False(t, Scenario("bogus").IsValid())
-}
-
 func TestBehaviorEntry_Validate(t *testing.T) {
 	t.Run("valid entry", func(t *testing.T) {
 		entry := BehaviorEntry{
 			Method:      "GET",
 			PathPattern: "/pets",
 			Type:        BehaviorList,
-			Scenarios:   []Scenario{ScenarioSuccess},
+
 			SuccessCode: 200,
 			Source:      SourceHeuristic,
 			Confidence:  0.9,
@@ -85,7 +65,7 @@ func TestBehaviorEntry_Validate(t *testing.T) {
 		entry := BehaviorEntry{
 			PathPattern: "/pets",
 			Type:        BehaviorList,
-			Scenarios:   []Scenario{ScenarioSuccess},
+
 			SuccessCode: 200,
 			Source:      SourceHeuristic,
 			Confidence:  0.9,
@@ -95,9 +75,9 @@ func TestBehaviorEntry_Validate(t *testing.T) {
 
 	t.Run("missing path pattern", func(t *testing.T) {
 		entry := BehaviorEntry{
-			Method:      "GET",
-			Type:        BehaviorList,
-			Scenarios:   []Scenario{ScenarioSuccess},
+			Method: "GET",
+			Type:   BehaviorList,
+
 			SuccessCode: 200,
 			Source:      SourceHeuristic,
 			Confidence:  0.9,
@@ -110,33 +90,7 @@ func TestBehaviorEntry_Validate(t *testing.T) {
 			Method:      "GET",
 			PathPattern: "/pets",
 			Type:        BehaviorType("bogus"),
-			Scenarios:   []Scenario{ScenarioSuccess},
-			SuccessCode: 200,
-			Source:      SourceHeuristic,
-			Confidence:  0.9,
-		}
-		assert.Error(t, entry.Validate())
-	})
 
-	t.Run("empty scenarios", func(t *testing.T) {
-		entry := BehaviorEntry{
-			Method:      "GET",
-			PathPattern: "/pets",
-			Type:        BehaviorList,
-			Scenarios:   []Scenario{},
-			SuccessCode: 200,
-			Source:      SourceHeuristic,
-			Confidence:  0.9,
-		}
-		assert.Error(t, entry.Validate())
-	})
-
-	t.Run("invalid scenario in list", func(t *testing.T) {
-		entry := BehaviorEntry{
-			Method:      "GET",
-			PathPattern: "/pets",
-			Type:        BehaviorList,
-			Scenarios:   []Scenario{ScenarioSuccess, Scenario("bogus")},
 			SuccessCode: 200,
 			Source:      SourceHeuristic,
 			Confidence:  0.9,
@@ -149,9 +103,9 @@ func TestBehaviorEntry_Validate(t *testing.T) {
 			Method:      "POST",
 			PathPattern: "/pets",
 			Type:        BehaviorCreate,
-			Scenarios:   []Scenario{ScenarioSuccess},
-			Source:      SourceHeuristic,
-			Confidence:  0.8,
+
+			Source:     SourceHeuristic,
+			Confidence: 0.8,
 		}
 		assert.Error(t, entry.Validate())
 	})
@@ -161,7 +115,7 @@ func TestBehaviorEntry_Validate(t *testing.T) {
 			Method:      "GET",
 			PathPattern: "/pets",
 			Type:        BehaviorList,
-			Scenarios:   []Scenario{ScenarioSuccess},
+
 			SuccessCode: 200,
 			Source:      Source("magic"),
 			Confidence:  0.9,
@@ -174,7 +128,7 @@ func TestBehaviorEntry_Validate(t *testing.T) {
 			Method:      "GET",
 			PathPattern: "/pets",
 			Type:        BehaviorList,
-			Scenarios:   []Scenario{ScenarioSuccess},
+
 			SuccessCode: 200,
 			Source:      SourceHeuristic,
 			Confidence:  1.5,
@@ -190,7 +144,6 @@ func TestBehaviorMap_PutAndGet(t *testing.T) {
 		Method:      "GET",
 		PathPattern: "/pets",
 		Type:        BehaviorList,
-		Scenarios:   []Scenario{ScenarioSuccess},
 		SuccessCode: 200,
 		Source:      SourceHeuristic,
 		Confidence:  0.9,

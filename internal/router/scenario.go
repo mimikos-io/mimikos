@@ -80,19 +80,11 @@ func selectSuccess(entry *model.BehaviorEntry) *SelectedScenario {
 }
 
 // hasStatusCode returns true if the entry has the given code in its
-// ErrorCodes or ResponseSchemas.
+// ResponseSchemas (key presence means "defined in spec").
 func hasStatusCode(entry *model.BehaviorEntry, code int) bool {
-	if _, ok := entry.ResponseSchemas[code]; ok {
-		return true
-	}
+	_, ok := entry.ResponseSchemas[code]
 
-	for _, c := range entry.ErrorCodes {
-		if c == code {
-			return true
-		}
-	}
-
-	return false
+	return ok
 }
 
 // formatAvailableCodes returns a sorted, comma-separated list of all
@@ -105,10 +97,6 @@ func formatAvailableCodes(entry *model.BehaviorEntry) string {
 		if code != 0 { // skip default schema sentinel
 			seen[code] = struct{}{}
 		}
-	}
-
-	for _, code := range entry.ErrorCodes {
-		seen[code] = struct{}{}
 	}
 
 	codes := make([]int, 0, len(seen))

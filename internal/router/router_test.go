@@ -66,7 +66,7 @@ func testBehaviorMap() *model.BehaviorMap {
 		Method:      http.MethodGet,
 		PathPattern: "/pets",
 		Type:        model.BehaviorList,
-		Scenarios:   []model.Scenario{model.ScenarioSuccess},
+
 		SuccessCode: http.StatusOK,
 		ResponseSchemas: map[int]*model.CompiledSchema{
 			http.StatusOK: {Name: "PetList", Schema: petArraySchema()},
@@ -79,7 +79,7 @@ func testBehaviorMap() *model.BehaviorMap {
 		Method:      http.MethodGet,
 		PathPattern: "/pets/{petId}",
 		Type:        model.BehaviorFetch,
-		Scenarios:   []model.Scenario{model.ScenarioSuccess},
+
 		SuccessCode: http.StatusOK,
 		ResponseSchemas: map[int]*model.CompiledSchema{
 			http.StatusOK: {Name: "Pet", Schema: petObjectSchema()},
@@ -92,7 +92,7 @@ func testBehaviorMap() *model.BehaviorMap {
 		Method:      http.MethodPost,
 		PathPattern: "/pets",
 		Type:        model.BehaviorCreate,
-		Scenarios:   []model.Scenario{model.ScenarioSuccess, model.ScenarioValidationError},
+
 		SuccessCode: http.StatusCreated,
 		ResponseSchemas: map[int]*model.CompiledSchema{
 			http.StatusCreated: {Name: "Pet", Schema: petObjectSchema()},
@@ -102,10 +102,10 @@ func testBehaviorMap() *model.BehaviorMap {
 	})
 
 	bm.Put(model.BehaviorEntry{
-		Method:          http.MethodDelete,
-		PathPattern:     "/pets/{petId}",
-		Type:            model.BehaviorDelete,
-		Scenarios:       []model.Scenario{model.ScenarioSuccess},
+		Method:      http.MethodDelete,
+		PathPattern: "/pets/{petId}",
+		Type:        model.BehaviorDelete,
+
 		SuccessCode:     http.StatusNoContent,
 		ResponseSchemas: map[int]*model.CompiledSchema{},
 		Source:          model.SourceHeuristic,
@@ -116,7 +116,7 @@ func testBehaviorMap() *model.BehaviorMap {
 		Method:      http.MethodGet,
 		PathPattern: "/pets/{petId}/toys/{toyId}",
 		Type:        model.BehaviorFetch,
-		Scenarios:   []model.Scenario{model.ScenarioSuccess},
+
 		SuccessCode: http.StatusOK,
 		ResponseSchemas: map[int]*model.CompiledSchema{
 			http.StatusOK: {Name: "Toy", Schema: petObjectSchema()},
@@ -417,10 +417,10 @@ func TestHandler_NilSchemaReturnsEmptyObject(t *testing.T) {
 	// Build a behavior map with a fetch entry that has no response schema.
 	bm := model.NewBehaviorMap()
 	bm.Put(model.BehaviorEntry{
-		Method:          http.MethodGet,
-		PathPattern:     "/empty",
-		Type:            model.BehaviorFetch,
-		Scenarios:       []model.Scenario{model.ScenarioSuccess},
+		Method:      http.MethodGet,
+		PathPattern: "/empty",
+		Type:        model.BehaviorFetch,
+
 		SuccessCode:     http.StatusOK,
 		ResponseSchemas: map[int]*model.CompiledSchema{},
 		Source:          model.SourceHeuristic,

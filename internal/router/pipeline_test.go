@@ -28,7 +28,7 @@ func pipelineBehaviorMap() *model.BehaviorMap {
 		Method:      http.MethodGet,
 		PathPattern: "/pets",
 		Type:        model.BehaviorList,
-		Scenarios:   []model.Scenario{model.ScenarioSuccess},
+
 		SuccessCode: http.StatusOK,
 		ResponseSchemas: map[int]*model.CompiledSchema{
 			http.StatusOK: {Name: "PetList", Schema: petArraySchema()},
@@ -41,9 +41,9 @@ func pipelineBehaviorMap() *model.BehaviorMap {
 		Method:      http.MethodPost,
 		PathPattern: "/pets",
 		Type:        model.BehaviorCreate,
-		Scenarios:   []model.Scenario{model.ScenarioSuccess, model.ScenarioValidationError},
+
 		SuccessCode: http.StatusCreated,
-		ErrorCodes:  []int{http.StatusBadRequest},
+
 		ResponseSchemas: map[int]*model.CompiledSchema{
 			http.StatusCreated:    {Name: "Pet", Schema: petObjectSchema()},
 			http.StatusBadRequest: {Name: "Error", Schema: petObjectSchema()},
@@ -56,9 +56,9 @@ func pipelineBehaviorMap() *model.BehaviorMap {
 		Method:      http.MethodGet,
 		PathPattern: "/pets/{petId}",
 		Type:        model.BehaviorFetch,
-		Scenarios:   []model.Scenario{model.ScenarioSuccess, model.ScenarioNotFound},
+
 		SuccessCode: http.StatusOK,
-		ErrorCodes:  []int{http.StatusNotFound},
+
 		ResponseSchemas: map[int]*model.CompiledSchema{
 			http.StatusOK:       {Name: "Pet", Schema: petObjectSchema()},
 			http.StatusNotFound: {Name: "Error", Schema: petObjectSchema()},
@@ -68,15 +68,15 @@ func pipelineBehaviorMap() *model.BehaviorMap {
 	})
 
 	bm.Put(model.BehaviorEntry{
-		Method:          http.MethodDelete,
-		PathPattern:     "/pets/{petId}",
-		Type:            model.BehaviorDelete,
-		Scenarios:       []model.Scenario{model.ScenarioSuccess, model.ScenarioNotFound},
-		SuccessCode:     http.StatusNoContent,
-		ErrorCodes:      []int{http.StatusNotFound},
-		ResponseSchemas: map[int]*model.CompiledSchema{},
-		Source:          model.SourceHeuristic,
-		Confidence:      0.9,
+		Method:      http.MethodDelete,
+		PathPattern: "/pets/{petId}",
+		Type:        model.BehaviorDelete,
+		SuccessCode: http.StatusNoContent,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusNotFound: nil, // defined in spec but no schema
+		},
+		Source:     model.SourceHeuristic,
+		Confidence: 0.9,
 	})
 
 	return bm

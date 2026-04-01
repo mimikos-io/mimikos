@@ -152,7 +152,6 @@ func TestSelectScenario_Explicit404(t *testing.T) {
 	entry := &model.BehaviorEntry{
 		Type:        model.BehaviorFetch,
 		SuccessCode: http.StatusOK,
-		ErrorCodes:  []int{http.StatusNotFound},
 		ResponseSchemas: map[int]*model.CompiledSchema{
 			http.StatusOK:       {Name: "Pet"},
 			http.StatusNotFound: {Name: "Error"},
@@ -171,7 +170,6 @@ func TestSelectScenario_Explicit400(t *testing.T) {
 	entry := &model.BehaviorEntry{
 		Type:        model.BehaviorCreate,
 		SuccessCode: http.StatusCreated,
-		ErrorCodes:  []int{http.StatusBadRequest},
 		ResponseSchemas: map[int]*model.CompiledSchema{
 			http.StatusCreated:    {Name: "Pet"},
 			http.StatusBadRequest: {Name: "ValidationError"},
@@ -191,7 +189,6 @@ func TestSelectScenario_Explicit422(t *testing.T) {
 	entry := &model.BehaviorEntry{
 		Type:        model.BehaviorCreate,
 		SuccessCode: http.StatusCreated,
-		ErrorCodes:  []int{http.StatusUnprocessableEntity},
 		ResponseSchemas: map[int]*model.CompiledSchema{
 			http.StatusCreated:             {Name: "Pet"},
 			http.StatusUnprocessableEntity: {Name: "UnprocessableError"},
@@ -252,13 +249,14 @@ func TestSelectScenario_InvalidNonNumeric(t *testing.T) {
 }
 
 func TestSelectScenario_ErrorCodeNoSchema_NilFallback(t *testing.T) {
-	// Spec defines 404 as error code but no response schema.
+	// Spec defines 404 but no response schema — nil value in ResponseSchemas.
 	// Schema should be nil — the caller handles RFC 7807 fallback.
 	entry := &model.BehaviorEntry{
-		Type:            model.BehaviorFetch,
-		SuccessCode:     http.StatusOK,
-		ErrorCodes:      []int{http.StatusNotFound},
-		ResponseSchemas: map[int]*model.CompiledSchema{},
+		Type:        model.BehaviorFetch,
+		SuccessCode: http.StatusOK,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusNotFound: nil,
+		},
 	}
 
 	result, err := SelectScenario(entry, "404")
@@ -273,7 +271,6 @@ func TestSelectScenario_FormatAvailableCodes(t *testing.T) {
 	entry := &model.BehaviorEntry{
 		Type:        model.BehaviorFetch,
 		SuccessCode: http.StatusOK,
-		ErrorCodes:  []int{http.StatusNotFound, http.StatusInternalServerError},
 		ResponseSchemas: map[int]*model.CompiledSchema{
 			http.StatusOK:                  {Name: "Pet"},
 			http.StatusNotFound:            {Name: "Error"},

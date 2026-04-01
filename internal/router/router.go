@@ -143,8 +143,6 @@ func (h *Handler) operationHandler(
 			return
 		}
 
-		seed := generator.Fingerprint(r.Method, r.URL.Path, r.URL.Query(), body)
-
 		requestedStatus := r.Header.Get(statusHeader)
 
 		scenario, err := SelectScenario(&entry, requestedStatus)
@@ -160,6 +158,8 @@ func (h *Handler) operationHandler(
 
 			return
 		}
+
+		seed := generator.Fingerprint(r.Method, r.URL.Path, r.URL.Query(), body)
 
 		writeResponse(w, gen, scenario, seed, h.strict)
 	}

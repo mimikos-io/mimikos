@@ -1,6 +1,6 @@
 // Package model defines the shared domain types used across all mimikos
 // components, including BehaviorType, BehaviorEntry, BehaviorMap,
-// Scenario, and CompiledSchema.
+// and CompiledSchema.
 package model
 
 import (
@@ -26,14 +26,8 @@ type (
 		// Type is the inferred CRUD behavior.
 		Type BehaviorType
 
-		// Scenarios lists the response scenarios this operation supports.
-		Scenarios []Scenario
-
 		// SuccessCode is the HTTP status code for the success scenario (e.g., 200, 201).
 		SuccessCode int
-
-		// ErrorCodes lists HTTP status codes for error scenarios.
-		ErrorCodes []int
 
 		// RequestSchema is the compiled schema for the request body, or nil if none.
 		RequestSchema *CompiledSchema
@@ -53,16 +47,12 @@ type (
 var (
 	// ErrInvalidBehaviorType is returned when parsing an unknown behavior type string.
 	ErrInvalidBehaviorType = errors.New("invalid behavior type")
-	// ErrInvalidScenario is returned when a scenario string is not recognized.
-	ErrInvalidScenario = errors.New("invalid scenario")
 	// ErrInvalidSource is returned when a source string is not recognized.
 	ErrInvalidSource = errors.New("invalid source")
 	// ErrMissingMethod is returned when a BehaviorEntry has no HTTP method.
 	ErrMissingMethod = errors.New("behavior entry: method is required")
 	// ErrMissingPathPattern is returned when a BehaviorEntry has no path pattern.
 	ErrMissingPathPattern = errors.New("behavior entry: path pattern is required")
-	// ErrMissingScenarios is returned when a BehaviorEntry has no scenarios.
-	ErrMissingScenarios = errors.New("behavior entry: at least one scenario is required")
 	// ErrMissingSuccessCode is returned when a BehaviorEntry has no success status code.
 	ErrMissingSuccessCode = errors.New("behavior entry: success code is required")
 	// ErrInvalidConfidence is returned when confidence is outside [0.0, 1.0].
@@ -129,16 +119,6 @@ func (e *BehaviorEntry) Validate() error {
 
 	if !e.Type.IsValid() {
 		return fmt.Errorf("%w: %q", ErrInvalidBehaviorType, e.Type)
-	}
-
-	if len(e.Scenarios) == 0 {
-		return ErrMissingScenarios
-	}
-
-	for _, s := range e.Scenarios {
-		if !s.IsValid() {
-			return fmt.Errorf("%w: %q", ErrInvalidScenario, s)
-		}
 	}
 
 	if e.SuccessCode == 0 {
