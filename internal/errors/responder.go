@@ -45,6 +45,10 @@ type (
 		// NotAcceptable writes a 406 response when the server cannot produce
 		// a response matching the request Accept header.
 		NotAcceptable(w http.ResponseWriter, accept string)
+
+		// InvalidScenario writes a 400 response when the X-Mimikos-Scenario
+		// header requests a scenario that is not valid for the operation.
+		InvalidScenario(w http.ResponseWriter, detail string)
 	}
 
 	// RFC 7807 types (unexported).
@@ -125,6 +129,11 @@ func (r *DefaultResponder) UnsupportedMediaType(w http.ResponseWriter, contentTy
 func (r *DefaultResponder) NotAcceptable(w http.ResponseWriter, accept string) {
 	detail := "Cannot produce response matching Accept: " + truncateDetail(accept)
 	writeProblem(w, http.StatusNotAcceptable, detail, nil)
+}
+
+// InvalidScenario writes a 400 RFC 7807 response for invalid scenario requests.
+func (r *DefaultResponder) InvalidScenario(w http.ResponseWriter, detail string) {
+	writeProblem(w, http.StatusBadRequest, truncateDetail(detail), nil)
 }
 
 // --- helpers ---

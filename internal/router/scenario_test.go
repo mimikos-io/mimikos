@@ -1,6 +1,7 @@
 package router
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -9,104 +10,106 @@ import (
 	"github.com/mimikos-io/mimikos/internal/model"
 )
 
+// --- Default scenario selection (no header) ---
+
 func TestSelectScenario_Create(t *testing.T) {
 	entry := &model.BehaviorEntry{
 		Type:        model.BehaviorCreate,
-		SuccessCode: 201,
+		SuccessCode: http.StatusCreated,
 		ResponseSchemas: map[int]*model.CompiledSchema{
-			201: {Name: "Pet"},
+			http.StatusCreated: {Name: "Pet"},
 		},
 	}
 
-	result := SelectScenario(entry)
+	result, err := SelectScenario(entry, "")
 
+	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.Equal(t, model.ScenarioSuccess, result.Scenario)
-	assert.Equal(t, 201, result.StatusCode)
+	assert.Equal(t, http.StatusCreated, result.StatusCode)
 	assert.Equal(t, "Pet", result.Schema.Name)
 }
 
 func TestSelectScenario_Fetch(t *testing.T) {
 	entry := &model.BehaviorEntry{
 		Type:        model.BehaviorFetch,
-		SuccessCode: 200,
+		SuccessCode: http.StatusOK,
 		ResponseSchemas: map[int]*model.CompiledSchema{
-			200: {Name: "Pet"},
+			http.StatusOK: {Name: "Pet"},
 		},
 	}
 
-	result := SelectScenario(entry)
+	result, err := SelectScenario(entry, "")
 
+	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.Equal(t, model.ScenarioSuccess, result.Scenario)
-	assert.Equal(t, 200, result.StatusCode)
+	assert.Equal(t, http.StatusOK, result.StatusCode)
 	assert.Equal(t, "Pet", result.Schema.Name)
 }
 
 func TestSelectScenario_List(t *testing.T) {
 	entry := &model.BehaviorEntry{
 		Type:        model.BehaviorList,
-		SuccessCode: 200,
+		SuccessCode: http.StatusOK,
 		ResponseSchemas: map[int]*model.CompiledSchema{
-			200: {Name: "PetList"},
+			http.StatusOK: {Name: "PetList"},
 		},
 	}
 
-	result := SelectScenario(entry)
+	result, err := SelectScenario(entry, "")
 
+	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.Equal(t, model.ScenarioSuccess, result.Scenario)
-	assert.Equal(t, 200, result.StatusCode)
+	assert.Equal(t, http.StatusOK, result.StatusCode)
 	assert.Equal(t, "PetList", result.Schema.Name)
 }
 
 func TestSelectScenario_Update(t *testing.T) {
 	entry := &model.BehaviorEntry{
 		Type:        model.BehaviorUpdate,
-		SuccessCode: 200,
+		SuccessCode: http.StatusOK,
 		ResponseSchemas: map[int]*model.CompiledSchema{
-			200: {Name: "Pet"},
+			http.StatusOK: {Name: "Pet"},
 		},
 	}
 
-	result := SelectScenario(entry)
+	result, err := SelectScenario(entry, "")
 
+	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.Equal(t, model.ScenarioSuccess, result.Scenario)
-	assert.Equal(t, 200, result.StatusCode)
+	assert.Equal(t, http.StatusOK, result.StatusCode)
 }
 
 func TestSelectScenario_Delete(t *testing.T) {
 	entry := &model.BehaviorEntry{
 		Type:        model.BehaviorDelete,
-		SuccessCode: 204,
+		SuccessCode: http.StatusNoContent,
 		ResponseSchemas: map[int]*model.CompiledSchema{
-			204: nil,
+			http.StatusNoContent: nil,
 		},
 	}
 
-	result := SelectScenario(entry)
+	result, err := SelectScenario(entry, "")
 
+	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.Equal(t, model.ScenarioSuccess, result.Scenario)
-	assert.Equal(t, 204, result.StatusCode)
+	assert.Equal(t, http.StatusNoContent, result.StatusCode)
 	assert.Nil(t, result.Schema)
 }
 
 func TestSelectScenario_Generic(t *testing.T) {
 	entry := &model.BehaviorEntry{
 		Type:        model.BehaviorGeneric,
-		SuccessCode: 200,
+		SuccessCode: http.StatusOK,
 		ResponseSchemas: map[int]*model.CompiledSchema{
-			200: {Name: "GenericResponse"},
+			http.StatusOK: {Name: "GenericResponse"},
 		},
 	}
 
-	result := SelectScenario(entry)
+	result, err := SelectScenario(entry, "")
 
+	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.Equal(t, model.ScenarioSuccess, result.Scenario)
-	assert.Equal(t, 200, result.StatusCode)
+	assert.Equal(t, http.StatusOK, result.StatusCode)
 	assert.Equal(t, "GenericResponse", result.Schema.Name)
 }
 
@@ -114,29 +117,173 @@ func TestSelectScenario_FallbackToDefaultSchema(t *testing.T) {
 	// Entry has no schema for SuccessCode (200) but has default (key 0).
 	entry := &model.BehaviorEntry{
 		Type:        model.BehaviorFetch,
-		SuccessCode: 200,
+		SuccessCode: http.StatusOK,
 		ResponseSchemas: map[int]*model.CompiledSchema{
 			0: {Name: "DefaultResponse"},
 		},
 	}
 
-	result := SelectScenario(entry)
+	result, err := SelectScenario(entry, "")
 
+	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.Equal(t, 200, result.StatusCode)
+	assert.Equal(t, http.StatusOK, result.StatusCode)
 	assert.Equal(t, "DefaultResponse", result.Schema.Name)
 }
 
 func TestSelectScenario_NoSchemaAtAll(t *testing.T) {
 	entry := &model.BehaviorEntry{
 		Type:            model.BehaviorFetch,
-		SuccessCode:     200,
+		SuccessCode:     http.StatusOK,
 		ResponseSchemas: map[int]*model.CompiledSchema{},
 	}
 
-	result := SelectScenario(entry)
+	result, err := SelectScenario(entry, "")
 
+	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.Equal(t, 200, result.StatusCode)
+	assert.Equal(t, http.StatusOK, result.StatusCode)
 	assert.Nil(t, result.Schema)
+}
+
+// --- Explicit status code selection via header ---
+
+func TestSelectScenario_Explicit404(t *testing.T) {
+	entry := &model.BehaviorEntry{
+		Type:        model.BehaviorFetch,
+		SuccessCode: http.StatusOK,
+		ErrorCodes:  []int{http.StatusNotFound},
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusOK:       {Name: "Pet"},
+			http.StatusNotFound: {Name: "Error"},
+		},
+	}
+
+	result, err := SelectScenario(entry, "404")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, http.StatusNotFound, result.StatusCode)
+	assert.Equal(t, "Error", result.Schema.Name)
+}
+
+func TestSelectScenario_Explicit400(t *testing.T) {
+	entry := &model.BehaviorEntry{
+		Type:        model.BehaviorCreate,
+		SuccessCode: http.StatusCreated,
+		ErrorCodes:  []int{http.StatusBadRequest},
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusCreated:    {Name: "Pet"},
+			http.StatusBadRequest: {Name: "ValidationError"},
+		},
+	}
+
+	result, err := SelectScenario(entry, "400")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, http.StatusBadRequest, result.StatusCode)
+	assert.Equal(t, "ValidationError", result.Schema.Name)
+}
+
+func TestSelectScenario_Explicit422(t *testing.T) {
+	// 422 Unprocessable Entity — common in GitHub API.
+	entry := &model.BehaviorEntry{
+		Type:        model.BehaviorCreate,
+		SuccessCode: http.StatusCreated,
+		ErrorCodes:  []int{http.StatusUnprocessableEntity},
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusCreated:             {Name: "Pet"},
+			http.StatusUnprocessableEntity: {Name: "UnprocessableError"},
+		},
+	}
+
+	result, err := SelectScenario(entry, "422")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, http.StatusUnprocessableEntity, result.StatusCode)
+	assert.Equal(t, "UnprocessableError", result.Schema.Name)
+}
+
+func TestSelectScenario_ExplicitSuccessCode(t *testing.T) {
+	// Explicitly requesting the success code should work.
+	entry := &model.BehaviorEntry{
+		Type:        model.BehaviorFetch,
+		SuccessCode: http.StatusOK,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusOK: {Name: "Pet"},
+		},
+	}
+
+	result, err := SelectScenario(entry, "200")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, http.StatusOK, result.StatusCode)
+	assert.Equal(t, "Pet", result.Schema.Name)
+}
+
+func TestSelectScenario_UnavailableStatusCode(t *testing.T) {
+	entry := &model.BehaviorEntry{
+		Type:            model.BehaviorList,
+		SuccessCode:     http.StatusOK,
+		ResponseSchemas: map[int]*model.CompiledSchema{},
+	}
+
+	result, err := SelectScenario(entry, "404")
+
+	assert.Nil(t, result)
+	require.ErrorIs(t, err, ErrStatusNotAvailable)
+	assert.Contains(t, err.Error(), "404")
+	assert.Contains(t, err.Error(), "200")
+}
+
+func TestSelectScenario_InvalidNonNumeric(t *testing.T) {
+	entry := &model.BehaviorEntry{
+		Type:        model.BehaviorFetch,
+		SuccessCode: http.StatusOK,
+	}
+
+	result, err := SelectScenario(entry, "not_found")
+
+	assert.Nil(t, result)
+	require.ErrorIs(t, err, ErrInvalidStatusCode)
+}
+
+func TestSelectScenario_ErrorCodeNoSchema_NilFallback(t *testing.T) {
+	// Spec defines 404 as error code but no response schema.
+	// Schema should be nil — the caller handles RFC 7807 fallback.
+	entry := &model.BehaviorEntry{
+		Type:            model.BehaviorFetch,
+		SuccessCode:     http.StatusOK,
+		ErrorCodes:      []int{http.StatusNotFound},
+		ResponseSchemas: map[int]*model.CompiledSchema{},
+	}
+
+	result, err := SelectScenario(entry, "404")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, http.StatusNotFound, result.StatusCode)
+	assert.Nil(t, result.Schema, "no error schema defined — caller falls back to RFC 7807")
+}
+
+func TestSelectScenario_FormatAvailableCodes(t *testing.T) {
+	entry := &model.BehaviorEntry{
+		Type:        model.BehaviorFetch,
+		SuccessCode: http.StatusOK,
+		ErrorCodes:  []int{http.StatusNotFound, http.StatusInternalServerError},
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusOK:                  {Name: "Pet"},
+			http.StatusNotFound:            {Name: "Error"},
+			http.StatusInternalServerError: {Name: "ServerError"},
+		},
+	}
+
+	_, err := SelectScenario(entry, "422")
+
+	require.ErrorIs(t, err, ErrStatusNotAvailable)
+	// Error message should list all available codes sorted.
+	assert.Contains(t, err.Error(), "200, 404, 500")
 }
