@@ -141,6 +141,23 @@ func TestNotAcceptable(t *testing.T) {
 	assert.Contains(t, body.Detail, "application/xml")
 }
 
+func TestInvalidScenario(t *testing.T) {
+	r := NewResponder()
+	w := httptest.NewRecorder()
+
+	r.InvalidScenario(w, `status code not available for this operation: 404 (available: 200)`)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	body := decodeProblemDetail(t, w)
+	assert.Equal(t, http.StatusBadRequest, body.Status)
+	assert.Equal(t, "Bad Request", body.Title)
+	assert.Contains(t, body.Detail, "404")
+}
+
 func TestContentTypeProblemJSON(t *testing.T) {
 	r := NewResponder()
 
@@ -162,6 +179,9 @@ func TestContentTypeProblemJSON(t *testing.T) {
 		}},
 		{"NotAcceptable", func(w http.ResponseWriter) {
 			r.NotAcceptable(w, "text/xml")
+		}},
+		{"InvalidScenario", func(w http.ResponseWriter) {
+			r.InvalidScenario(w, "invalid status")
 		}},
 	}
 

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -30,19 +31,23 @@ const contentTypeJSON = "application/json"
 type Handler struct {
 	mux       *http.ServeMux
 	responder merrors.Responder
+	strict    bool
 }
 
 // NewHandler creates a Handler that routes requests based on the given
 // BehaviorMap. All dependencies are injected: validator for request
 // validation, responder for error responses, generator for response data.
+// When strict is true, response validation failures return 500 instead of
+// logging a warning and sending the response anyway.
 func NewHandler(
 	behaviorMap *model.BehaviorMap,
 	v validator.RequestValidator,
 	responder merrors.Responder,
 	gen *generator.DataGenerator,
+	strict bool,
 ) *Handler {
 	mux := http.NewServeMux()
-	h := &Handler{mux: mux, responder: responder}
+	h := &Handler{mux: mux, responder: responder, strict: strict}
 
 	// Collect entries by path pattern for 405 handling.
 	methodsByPath := make(map[string][]string)
@@ -140,20 +145,39 @@ func (h *Handler) operationHandler(
 
 		seed := generator.Fingerprint(r.Method, r.URL.Path, r.URL.Query(), body)
 
-		scenario := SelectScenario(&entry)
+		requestedStatus := r.Header.Get(statusHeader)
 
-		writeSuccessResponse(w, gen, scenario, seed)
+		scenario, err := SelectScenario(&entry, requestedStatus)
+		if err != nil {
+			h.responder.InvalidScenario(w, err.Error())
+
+			return
+		}
+
+		if scenario.Schema == nil && scenario.StatusCode != entry.SuccessCode {
+			// Error status with no spec-defined schema — use RFC 7807 fallback.
+			writeErrorFallback(w, scenario)
+
+			return
+		}
+
+		writeResponse(w, gen, scenario, seed, h.strict)
 	}
 }
 
-// writeSuccessResponse generates and writes the success response for a
-// matched, valid request. For 204 No Content, no body is written. For nil
-// schemas, an empty JSON object is returned as a sensible default.
-func writeSuccessResponse(
+// writeResponse generates, validates, and writes the response for a matched
+// request. For 204 No Content, no body is written. For nil schemas, an empty
+// JSON object is returned as a sensible default.
+//
+// Response validation catches generator bugs where the produced data does not
+// conform to the OpenAPI schema. In default mode, a warning is logged and the
+// response is sent anyway. In strict mode, a 500 is returned instead.
+func writeResponse(
 	w http.ResponseWriter,
 	gen *generator.DataGenerator,
 	scenario *SelectedScenario,
 	seed int64,
+	strict bool,
 ) {
 	if scenario.StatusCode == http.StatusNoContent {
 		w.WriteHeader(http.StatusNoContent)
@@ -161,19 +185,9 @@ func writeSuccessResponse(
 		return
 	}
 
-	var responseBody any
-
-	if scenario.Schema != nil && scenario.Schema.Schema != nil {
-		var err error
-
-		responseBody, err = gen.Generate(scenario.Schema.Schema, seed)
-		if err != nil {
-			writeProblem(w, http.StatusInternalServerError, "Failed to generate response")
-
-			return
-		}
-	} else {
-		responseBody = map[string]any{}
+	responseBody, ok := generateResponseBody(w, gen, scenario, seed, strict)
+	if !ok {
+		return
 	}
 
 	w.Header().Set("Content-Type", contentTypeJSON)
@@ -218,6 +232,53 @@ func isJSONContentType(ct string) bool {
 
 	// Accept application/*+json variants (RFC 6838 §4.2.8).
 	return strings.HasPrefix(ct, "application/") && strings.HasSuffix(ct, "+json")
+}
+
+// writeErrorFallback writes an RFC 7807 response for error status codes that
+// have no spec-defined error schema. This is the fallback when the OpenAPI spec
+// does not define a response body for the requested error status code.
+func writeErrorFallback(w http.ResponseWriter, scenario *SelectedScenario) {
+	writeProblem(w, scenario.StatusCode,
+		"Simulated "+http.StatusText(scenario.StatusCode)+" response")
+}
+
+// generateResponseBody produces the response payload using the generator and
+// validates it against the schema. Returns the body and true on success, or
+// writes an error response and returns false if generation fails or strict
+// validation rejects the output.
+func generateResponseBody(
+	w http.ResponseWriter,
+	gen *generator.DataGenerator,
+	scenario *SelectedScenario,
+	seed int64,
+	strict bool,
+) (any, bool) {
+	if scenario.Schema == nil || scenario.Schema.Schema == nil {
+		return map[string]any{}, true
+	}
+
+	responseBody, err := gen.Generate(scenario.Schema.Schema, seed)
+	if err != nil {
+		writeProblem(w, http.StatusInternalServerError, "Failed to generate response")
+
+		return nil, false
+	}
+
+	if valErr := scenario.Schema.Validate(responseBody); valErr != nil {
+		if strict {
+			writeProblem(w, http.StatusInternalServerError,
+				"response validation failed: "+valErr.Error())
+
+			return nil, false
+		}
+
+		slog.Warn("generated response does not match schema",
+			"schema", scenario.Schema.Name,
+			"error", valErr.Error(),
+		)
+	}
+
+	return responseBody, true
 }
 
 // writeProblem writes a minimal RFC 7807 response for infrastructure errors
