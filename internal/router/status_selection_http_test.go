@@ -84,7 +84,7 @@ func scenarioBehaviorMap() *model.BehaviorMap {
 
 func newScenarioTestHandler() *Handler {
 	resp := merrors.NewResponder()
-	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0)
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
 
 	return NewHandler(scenarioBehaviorMap(), &stubValidator{}, resp, gen, false, nil)
 }

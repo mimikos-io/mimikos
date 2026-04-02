@@ -63,7 +63,7 @@ func TestResponseValidation_ValidResponse(t *testing.T) {
 
 	bm := behaviorMapWithSchema(sch)
 	resp := merrors.NewResponder()
-	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0)
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
 	h := NewHandler(bm, &stubValidator{}, resp, gen, false, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/items/1", nil)
@@ -89,7 +89,7 @@ func TestResponseValidation_InvalidDefault_SendsAnyway(t *testing.T) {
 
 	bm := behaviorMapWithSchema(sch)
 	resp := merrors.NewResponder()
-	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0)
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
 	h := NewHandler(bm, &stubValidator{}, resp, gen, false, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/items/1", nil)
@@ -118,7 +118,7 @@ func TestResponseValidation_InvalidStrict_Returns500(t *testing.T) {
 
 	bm := behaviorMapWithSchema(sch)
 	resp := merrors.NewResponder()
-	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0)
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
 	h := NewHandler(bm, &stubValidator{}, resp, gen, true, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/items/1", nil)
@@ -147,7 +147,7 @@ func TestResponseValidation_NilSchema_SkipsValidation(t *testing.T) {
 	})
 
 	resp := merrors.NewResponder()
-	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0)
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
 	h := NewHandler(bm, &stubValidator{}, resp, gen, true, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/empty", nil)
@@ -172,7 +172,7 @@ func TestResponseValidation_204NoContent_SkipsValidation(t *testing.T) {
 	})
 
 	resp := merrors.NewResponder()
-	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0)
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
 	h := NewHandler(bm, &stubValidator{}, resp, gen, true, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/items/1", nil)

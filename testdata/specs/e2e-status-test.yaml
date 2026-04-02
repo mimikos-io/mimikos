@@ -1,0 +1,100 @@
+openapi: "3.0.3"
+info:
+  title: E2E Status Test API
+  version: "1.0.0"
+  description: >
+    Test spec with explicit error status codes for X-Mimikos-Status testing.
+    Unlike the petstore specs (which only have `default` error responses),
+    this spec defines 404, 422, and 500 responses explicitly.
+paths:
+  /resources:
+    get:
+      operationId: listResources
+      responses:
+        "200":
+          description: List of resources
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Resource"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      operationId: createResource
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewResource"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resource"
+        "422":
+          description: Unprocessable entity
+  /resources/{id}:
+    get:
+      operationId: getResource
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Resource found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resource"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+components:
+  schemas:
+    Resource:
+      type: object
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+    NewResource:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+        description:
+          type: string
+    ErrorResponse:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
