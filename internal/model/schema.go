@@ -3,7 +3,7 @@ package model
 import "github.com/santhosh-tekuri/jsonschema/v6"
 
 // CompiledSchema wraps a pre-compiled JSON Schema validator for
-// request/response validation. Produced by the Schema Compiler (Task 6.4)
+// request/response validation. Produced by the Schema Compiler
 // from OpenAPI schemas parsed by the Spec Parser.
 type CompiledSchema struct {
 	// Name is a human-readable identifier for the schema (e.g., "Pet", "Error").

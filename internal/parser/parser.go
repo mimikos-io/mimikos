@@ -16,12 +16,7 @@ import (
 	"github.com/pb33f/libopenapi/orderedmap"
 )
 
-// SpecParser parses raw OpenAPI spec bytes into a normalized ParsedSpec.
-type SpecParser interface {
-	Parse(ctx context.Context, data []byte) (*ParsedSpec, error)
-}
-
-// LibopenAPIParser implements SpecParser using libopenapi.
+// LibopenAPIParser parses OpenAPI specs using libopenapi.
 type LibopenAPIParser struct {
 	logger *slog.Logger
 }
@@ -36,19 +31,13 @@ func NewLibopenAPIParser(logger *slog.Logger) *LibopenAPIParser {
 	return &LibopenAPIParser{logger: logger}
 }
 
-// Parse parses raw OpenAPI spec bytes into a normalized ParsedSpec.
-func (p *LibopenAPIParser) Parse(ctx context.Context, data []byte) (*ParsedSpec, error) {
-	if len(data) == 0 {
-		return nil, ErrEmptyInput
-	}
-
+// Parse parses a pre-built libopenapi Document into a normalized ParsedSpec.
+// The caller is responsible for creating the Document from raw spec bytes via
+// libopenapi.NewDocument. This avoids double-parsing when the Document is
+// shared with other consumers (e.g., the request validator).
+func (p *LibopenAPIParser) Parse(ctx context.Context, doc libopenapi.Document) (*ParsedSpec, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
-	}
-
-	doc, err := libopenapi.NewDocument(data)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidSpec, err)
 	}
 
 	version := doc.GetVersion()

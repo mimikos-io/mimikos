@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/pb33f/libopenapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,6 +32,26 @@ func loadSpec(t *testing.T, name string) []byte {
 	return data
 }
 
+// loadDocument reads a spec file and creates a libopenapi.Document.
+func loadDocument(t *testing.T, name string) libopenapi.Document {
+	t.Helper()
+
+	data := loadSpec(t, name)
+	doc, err := libopenapi.NewDocument(data)
+	require.NoError(t, err)
+
+	return doc
+}
+
+func newDocument(t *testing.T, data []byte) libopenapi.Document {
+	t.Helper()
+
+	doc, err := libopenapi.NewDocument(data)
+	require.NoError(t, err)
+
+	return doc
+}
+
 // newParser creates a LibopenAPIParser with no logger (quiet tests).
 func newParser() *LibopenAPIParser {
 	return NewLibopenAPIParser(nil)
@@ -38,65 +59,40 @@ func newParser() *LibopenAPIParser {
 
 // --- Error Cases ---
 
-func TestParse_EmptyInput(t *testing.T) {
-	p := newParser()
-
-	_, err := p.Parse(context.Background(), nil)
-	require.ErrorIs(t, err, ErrEmptyInput)
-
-	_, err = p.Parse(context.Background(), []byte{})
-	require.ErrorIs(t, err, ErrEmptyInput)
-}
-
-func TestParse_InvalidYAML(t *testing.T) {
-	p := newParser()
-
-	_, err := p.Parse(context.Background(), []byte("not: valid: yaml: ["))
-	assert.ErrorIs(t, err, ErrInvalidSpec)
-}
-
-func TestParse_NotOpenAPI(t *testing.T) {
-	p := newParser()
-
-	// Valid YAML but not an OpenAPI document.
-	_, err := p.Parse(context.Background(), []byte("name: just a yaml file\nversion: 1"))
-	assert.ErrorIs(t, err, ErrInvalidSpec)
-}
-
 func TestParse_SwaggerV2(t *testing.T) {
 	p := newParser()
 
-	spec := []byte(`swagger: "2.0"
+	doc := newDocument(t, []byte(`swagger: "2.0"
 info:
   title: Old API
   version: "1.0"
-paths: {}`)
+paths: {}`))
 
-	_, err := p.Parse(context.Background(), spec)
+	_, err := p.Parse(context.Background(), doc)
 	assert.ErrorIs(t, err, ErrUnsupportedVersion)
 }
 
 func TestParse_FutureVersion(t *testing.T) {
 	p := newParser()
 
-	spec := []byte(`openapi: "4.0.0"
+	doc := newDocument(t, []byte(`openapi: "4.0.0"
 info:
   title: Future API
   version: "1.0"
-paths: {}`)
+paths: {}`))
 
-	_, err := p.Parse(context.Background(), spec)
+	_, err := p.Parse(context.Background(), doc)
 	assert.ErrorIs(t, err, ErrUnsupportedVersion)
 }
 
 func TestParse_ContextCancellation(t *testing.T) {
 	p := newParser()
-	data := loadSpec(t, "petstore-3.0.yaml")
+	doc := loadDocument(t, "petstore-3.0.yaml")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately.
 
-	_, err := p.Parse(ctx, data)
+	_, err := p.Parse(ctx, doc)
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
@@ -104,9 +100,9 @@ func TestParse_ContextCancellation(t *testing.T) {
 
 func TestParse_Petstore30(t *testing.T) {
 	p := newParser()
-	data := loadSpec(t, "petstore-3.0.yaml")
+	doc := loadDocument(t, "petstore-3.0.yaml")
 
-	spec, err := p.Parse(context.Background(), data)
+	spec, err := p.Parse(context.Background(), doc)
 	require.NoError(t, err)
 	require.NotNil(t, spec)
 
@@ -174,9 +170,9 @@ func TestParse_Petstore30(t *testing.T) {
 
 func TestParse_Petstore30Expanded(t *testing.T) {
 	p := newParser()
-	data := loadSpec(t, "petstore-3.0-expanded.yaml")
+	doc := loadDocument(t, "petstore-3.0-expanded.yaml")
 
-	spec, err := p.Parse(context.Background(), data)
+	spec, err := p.Parse(context.Background(), doc)
 	require.NoError(t, err)
 	require.NotNil(t, spec)
 
@@ -241,9 +237,9 @@ func TestParse_Petstore30Expanded(t *testing.T) {
 
 func TestParse_Petstore31(t *testing.T) {
 	p := newParser()
-	data := loadSpec(t, "petstore-3.1.yaml")
+	doc := loadDocument(t, "petstore-3.1.yaml")
 
-	spec, err := p.Parse(context.Background(), data)
+	spec, err := p.Parse(context.Background(), doc)
 	require.NoError(t, err)
 	require.NotNil(t, spec)
 
@@ -349,9 +345,9 @@ func TestParse_Petstore31(t *testing.T) {
 
 func TestParse_RefsFullyResolved(t *testing.T) {
 	p := newParser()
-	data := loadSpec(t, "petstore-3.0.yaml")
+	doc := loadDocument(t, "petstore-3.0.yaml")
 
-	spec, err := p.Parse(context.Background(), data)
+	spec, err := p.Parse(context.Background(), doc)
 	require.NoError(t, err)
 
 	// Every SchemaRef.Raw must be non-nil (all $refs resolved).
@@ -379,9 +375,9 @@ func TestParse_RefsFullyResolved(t *testing.T) {
 
 func TestParse_OperationOrderMatchesSpec(t *testing.T) {
 	p := newParser()
-	data := loadSpec(t, "petstore-3.0.yaml")
+	doc := loadDocument(t, "petstore-3.0.yaml")
 
-	spec, err := p.Parse(context.Background(), data)
+	spec, err := p.Parse(context.Background(), doc)
 	require.NoError(t, err)
 
 	// Petstore 3.0 defines: /pets (GET, POST), /pets/{petId} (GET).
@@ -401,8 +397,8 @@ func TestIsNullable(t *testing.T) {
 	p := newParser()
 
 	t.Run("3.0_not_nullable", func(t *testing.T) {
-		data := loadSpec(t, "petstore-3.0.yaml")
-		spec, err := p.Parse(context.Background(), data)
+		doc := loadDocument(t, "petstore-3.0.yaml")
+		spec, err := p.Parse(context.Background(), doc)
 		require.NoError(t, err)
 
 		// Pet.tag is not nullable in 3.0 petstore (plain type: string).
@@ -417,7 +413,7 @@ func TestIsNullable(t *testing.T) {
 
 	t.Run("3.0_nullable_true", func(t *testing.T) {
 		// Inline spec with nullable: true (3.0 style).
-		spec := []byte(`openapi: "3.0.0"
+		doc := newDocument(t, []byte(`openapi: "3.0.0"
 info:
   title: Nullable Test
   version: "1.0"
@@ -435,9 +431,9 @@ paths:
                 properties:
                   nickname:
                     type: string
-                    nullable: true`)
+                    nullable: true`))
 
-		result, err := p.Parse(context.Background(), spec)
+		result, err := p.Parse(context.Background(), doc)
 		require.NoError(t, err)
 
 		op := result.Operations[0]
@@ -450,8 +446,8 @@ paths:
 	})
 
 	t.Run("3.1_type_array_with_null", func(t *testing.T) {
-		data := loadSpec(t, "petstore-3.1.yaml")
-		spec, err := p.Parse(context.Background(), data)
+		doc := loadDocument(t, "petstore-3.1.yaml")
+		spec, err := p.Parse(context.Background(), doc)
 		require.NoError(t, err)
 
 		// Pet.tag in 3.1 is type: ["string", "null"].
@@ -469,8 +465,8 @@ func TestPrimaryType(t *testing.T) {
 	p := newParser()
 
 	t.Run("single_type", func(t *testing.T) {
-		data := loadSpec(t, "petstore-3.0.yaml")
-		spec, err := p.Parse(context.Background(), data)
+		doc := loadDocument(t, "petstore-3.0.yaml")
+		spec, err := p.Parse(context.Background(), doc)
 		require.NoError(t, err)
 
 		// Pet.name is type: string.
@@ -484,8 +480,8 @@ func TestPrimaryType(t *testing.T) {
 	})
 
 	t.Run("type_array_with_null", func(t *testing.T) {
-		data := loadSpec(t, "petstore-3.1.yaml")
-		spec, err := p.Parse(context.Background(), data)
+		doc := loadDocument(t, "petstore-3.1.yaml")
+		spec, err := p.Parse(context.Background(), doc)
 		require.NoError(t, err)
 
 		// Pet.tag in 3.1 is type: ["string", "null"] → PrimaryType should return "string".
@@ -502,8 +498,8 @@ func TestPrimaryType(t *testing.T) {
 		// Schemas with properties but no explicit type should return "".
 		// This is an edge case documented in spike findings §5.5.
 		// The caller is responsible for inferring "object" when appropriate.
-		data := loadSpec(t, "petstore-3.0.yaml")
-		spec, err := p.Parse(context.Background(), data)
+		doc := loadDocument(t, "petstore-3.0.yaml")
+		spec, err := p.Parse(context.Background(), doc)
 		require.NoError(t, err)
 
 		// Pets schema is type: array — verify that works.
@@ -519,7 +515,7 @@ func TestParse_PlusJSONContentType(t *testing.T) {
 	p := newParser()
 
 	// Spec uses application/vnd.api+json instead of application/json.
-	spec := []byte(`openapi: "3.0.0"
+	doc := newDocument(t, []byte(`openapi: "3.0.0"
 info:
   title: JSON API Test
   version: "1.0"
@@ -559,9 +555,9 @@ paths:
                 type: object
                 properties:
                   id:
-                    type: string`)
+                    type: string`))
 
-	result, err := p.Parse(context.Background(), spec)
+	result, err := p.Parse(context.Background(), doc)
 	require.NoError(t, err)
 	require.Len(t, result.Operations, 2)
 
@@ -578,10 +574,4 @@ paths:
 		require.NotNil(t, op.RequestBody.Schema)
 		assert.True(t, op.RequestBody.Required)
 	})
-}
-
-// --- Interface Compliance ---
-
-func TestLibopenAPIParser_ImplementsInterface(_ *testing.T) {
-	var _ SpecParser = newParser()
 }

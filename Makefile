@@ -280,7 +280,8 @@ build-dev:
 	@echo "🔨 Building development binary..."
 	$(call get-version-info)
 	go build -ldflags "-X main.version=$(VERSION) -X main.gitCommit=$(COMMIT) -X 'main.buildTime=$(BUILD_TIME)'" -o bin/$(BINARY_NAME) ./cmd/mimikos
-	@echo "✅ Built: bin/$(BINARY_NAME)"
+	@ln -sf $(BINARY_NAME) bin/mimik
+	@echo "✅ Built: bin/$(BINARY_NAME) (+ bin/mimik symlink)"
 
 # Internal build targets
 build-prod:
@@ -290,7 +291,8 @@ build-prod:
 	CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo \
 		-ldflags "-X main.version=$(VERSION) -X main.gitCommit=$(COMMIT) -X 'main.buildTime=$(BUILD_TIME)'" \
 		-o build/$(BINARY_NAME) ./cmd/mimikos
-	@echo "✅ Production build complete: build/$(BINARY_NAME)"
+	@ln -sf $(BINARY_NAME) build/mimik
+	@echo "✅ Production build complete: build/$(BINARY_NAME) (+ build/mimik symlink)"
 
 #===============================================================================
 # MAINTENANCE
