@@ -84,7 +84,7 @@ func pipelineBehaviorMap() *model.BehaviorMap {
 
 func newPipelineHandler(v *stubValidator) *Handler {
 	resp := merrors.NewResponder()
-	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0)
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
 
 	return NewHandler(pipelineBehaviorMap(), v, resp, gen, false, nil)
 }
@@ -236,7 +236,7 @@ func TestPipeline_Delete404_RFC7807Fallback(t *testing.T) {
 
 func BenchmarkPipeline_GetItem(b *testing.B) {
 	resp := merrors.NewResponder()
-	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0)
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
 	h := NewHandler(pipelineBehaviorMap(), &stubValidator{}, resp, gen, false, nil)
 
 	b.ResetTimer()
@@ -250,7 +250,7 @@ func BenchmarkPipeline_GetItem(b *testing.B) {
 
 func BenchmarkPipeline_PostCreate(b *testing.B) {
 	resp := merrors.NewResponder()
-	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0)
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
 	h := NewHandler(pipelineBehaviorMap(), &stubValidator{}, resp, gen, false, nil)
 
 	body := `{"name":"Fido"}`
@@ -269,7 +269,7 @@ func BenchmarkPipeline_PostCreate(b *testing.B) {
 
 func BenchmarkPipeline_GetCollection(b *testing.B) {
 	resp := merrors.NewResponder()
-	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0)
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
 	h := NewHandler(pipelineBehaviorMap(), &stubValidator{}, resp, gen, false, nil)
 
 	b.ResetTimer()

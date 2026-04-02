@@ -13,7 +13,9 @@
 package generator
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"sort"
 	"strconv"
@@ -41,34 +43,64 @@ const mapKeyLen = 6
 // uniqueItems is required and a duplicate is generated.
 const maxUniqueRetries = 10
 
+// maxRecursion is a hard safety limit on total call depth (structural +
+// composition) to prevent stack overflow on circular allOf/oneOf/anyOf
+// chains where no intermediate object/array increments structural depth.
+const maxRecursion = 64
+
 // DataGenerator produces deterministic, schema-complete response data by
 // walking a JSON Schema tree. It delegates primitive leaf generation to
 // [PrimitiveGenerator] and handles object properties, array items,
 // polymorphism (allOf/oneOf/anyOf), and circular reference termination.
 //
-// Depth tracking prevents infinite recursion for both circular schemas and
-// deeply nested structures. Objects at the depth limit produce nil (JSON null).
-// Arrays at the depth limit produce empty slices (JSON []). Polymorphism
-// keywords (allOf/oneOf/anyOf) each consume one depth level to ensure
-// circular polymorphic references terminate.
+// Two depth counters prevent infinite recursion:
+//
+//   - depth (structural): incremented only by object properties and array
+//     items. Composition keywords (allOf/oneOf/anyOf) are depth-neutral —
+//     they describe what an object is made of, not deeper nesting. This
+//     allows specs with deep allOf inheritance chains (e.g., TaskResponse →
+//     TaskBase → TaskCompact → AsanaResource) to fully resolve without
+//     hitting the depth limit. Objects at the depth limit produce nil
+//     (JSON null). Arrays at the depth limit produce empty slices (JSON []).
+//
+//   - recurse (absolute): incremented on every call into generate,
+//     regardless of kind. Acts as a hard safety net (maxRecursion = 64)
+//     against stack overflow from circular composition chains
+//     (e.g., A.allOf → B, B.allOf → A) that never pass through an
+//     object or array to increment structural depth.
 //
 // All outputs are deterministic: identical schemas with identical seeds
 // always produce identical data structures.
 type DataGenerator struct {
 	primitive *PrimitiveGenerator
 	maxDepth  int
+	logger    *slog.Logger
 }
+
+// discardHandler is a slog.Handler that discards all log output.
+type discardHandler struct{}
+
+func (discardHandler) Enabled(context.Context, slog.Level) bool  { return false }
+func (discardHandler) Handle(context.Context, slog.Record) error { return nil }
+func (d discardHandler) WithAttrs([]slog.Attr) slog.Handler      { return d }
+func (d discardHandler) WithGroup(string) slog.Handler           { return d }
 
 // NewDataGenerator creates a generator with the given semantic mapper and
 // maximum recursion depth. If maxDepth is 0, the default (3) is used.
-func NewDataGenerator(semantic *SemanticMapper, maxDepth int) *DataGenerator {
+// If logger is nil, a no-op logger is used.
+func NewDataGenerator(semantic *SemanticMapper, maxDepth int, logger *slog.Logger) *DataGenerator {
 	if maxDepth <= 0 {
 		maxDepth = defaultMaxDepth
+	}
+
+	if logger == nil {
+		logger = slog.New(discardHandler{})
 	}
 
 	return &DataGenerator{
 		primitive: NewPrimitiveGenerator(semantic),
 		maxDepth:  maxDepth,
+		logger:    logger,
 	}
 }
 
@@ -77,19 +109,36 @@ func NewDataGenerator(semantic *SemanticMapper, maxDepth int) *DataGenerator {
 // (map[string]any for objects, []any for arrays, or a primitive) and
 // nil error on success.
 func (g *DataGenerator) Generate(schema *jsonschema.Schema, seed int64) (any, error) {
-	return g.generate(schema, seed, "", 0)
+	return g.generate(schema, seed, "", 0, 0)
 }
 
 // generate is the recursive core. It resolves $ref, polymorphism, and type
-// dispatch, threading depth for circular reference termination.
-func (g *DataGenerator) generate(schema *jsonschema.Schema, seed int64, fieldName string, depth int) (any, error) {
+// dispatch, threading depth for structural termination and recurse for
+// absolute stack-overflow protection.
+//
+//nolint:cyclop
+func (g *DataGenerator) generate(
+	schema *jsonschema.Schema, seed int64, fieldName string, depth int, recurse int,
+) (any, error) {
 	if schema == nil {
 		return nil, nil //nolint:nilnil // nil schema produces nil value
 	}
 
+	// Hard recursion guard: prevents stack overflow on circular compositions
+	// (e.g., A.allOf→B, B.allOf→A) where no object/array increments depth.
+	// Logged at Warn because hitting this limit signals a likely spec defect
+	// (purely circular composition chain), not normal depth management.
+	if recurse >= maxRecursion {
+		g.logger.Warn("recursion limit reached — possible circular schema",
+			"recurse", recurse, "field", fieldName,
+			"schema", schemaID(schema))
+
+		return nil, nil //nolint:nilnil // recursion limit termination
+	}
+
 	// 1. Follow $ref — alias, does not increment depth.
 	if schema.Ref != nil {
-		return g.generate(schema.Ref, seed, fieldName, depth)
+		return g.generate(schema.Ref, seed, fieldName, depth, recurse+1)
 	}
 
 	// 2. Const / enum short-circuit (delegate to primitive).
@@ -98,18 +147,21 @@ func (g *DataGenerator) generate(schema *jsonschema.Schema, seed int64, fieldNam
 	}
 
 	// 3. Polymorphism — checked before type dispatch.
-	// Each polymorphism keyword consumes one depth level to prevent
-	// infinite recursion on circular allOf/oneOf/anyOf chains.
+	// Composition keywords (allOf/oneOf/anyOf) are depth-neutral: they
+	// describe "what this object is made of," not structural nesting.
+	// Only object properties and array items increment depth. This
+	// prevents artificial depth exhaustion on specs with deep allOf
+	// inheritance chains.
 	if len(schema.AllOf) > 0 {
-		return g.generateAllOf(schema, seed, depth+1)
+		return g.generateAllOf(schema, seed, depth, recurse+1)
 	}
 
 	if len(schema.OneOf) > 0 {
-		return g.generateBranch(schema.OneOf, seed, fieldName, depth+1)
+		return g.generateBranch(schema.OneOf, seed, fieldName, depth, recurse+1)
 	}
 
 	if len(schema.AnyOf) > 0 {
-		return g.generateBranch(schema.AnyOf, seed, fieldName, depth+1)
+		return g.generateBranch(schema.AnyOf, seed, fieldName, depth, recurse+1)
 	}
 
 	// 4. Type dispatch.
@@ -118,16 +170,24 @@ func (g *DataGenerator) generate(schema *jsonschema.Schema, seed int64, fieldNam
 	switch typ {
 	case typeObject:
 		if depth >= g.maxDepth {
+			g.logger.Debug("depth termination: object → null",
+				"depth", depth, "maxDepth", g.maxDepth, "field", fieldName,
+				"schema", schemaID(schema))
+
 			return nil, nil //nolint:nilnil // depth termination — nil is the documented sentinel
 		}
 
-		return g.generateObject(schema, seed, depth)
+		return g.generateObject(schema, seed, depth, recurse)
 	case typeArray:
 		if depth >= g.maxDepth {
+			g.logger.Debug("depth termination: array → []",
+				"depth", depth, "maxDepth", g.maxDepth, "field", fieldName,
+				"schema", schemaID(schema))
+
 			return []any{}, nil // depth termination — empty array
 		}
 
-		return g.generateArray(schema, seed, depth)
+		return g.generateArray(schema, seed, depth, recurse)
 	case typeNull:
 		return nil, nil //nolint:nilnil // null type produces nil
 	default:
@@ -140,11 +200,13 @@ func (g *DataGenerator) generate(schema *jsonschema.Schema, seed int64, fieldNam
 
 // generateObject produces a map[string]any with all defined properties.
 // Properties are iterated in sorted order for deterministic output.
-func (g *DataGenerator) generateObject(schema *jsonschema.Schema, seed int64, depth int) (map[string]any, error) {
+func (g *DataGenerator) generateObject(
+	schema *jsonschema.Schema, seed int64, depth int, recurse int,
+) (map[string]any, error) {
 	// Map-type schema: no defined properties, but additionalProperties is a schema.
 	if len(schema.Properties) == 0 {
 		if addlSchema, ok := schema.AdditionalProperties.(*jsonschema.Schema); ok {
-			return g.generateMapEntries(addlSchema, seed, depth)
+			return g.generateMapEntries(addlSchema, seed, depth, recurse)
 		}
 
 		return map[string]any{}, nil
@@ -164,7 +226,7 @@ func (g *DataGenerator) generateObject(schema *jsonschema.Schema, seed int64, de
 		propSchema := schema.Properties[name]
 		fieldSeed := FieldSeed(seed, name)
 
-		val, err := g.generate(propSchema, fieldSeed, name, depth+1)
+		val, err := g.generate(propSchema, fieldSeed, name, depth+1, recurse+1)
 		if err != nil {
 			return nil, fmt.Errorf("property %q: %w", name, err)
 		}
@@ -178,7 +240,7 @@ func (g *DataGenerator) generateObject(schema *jsonschema.Schema, seed int64, de
 // generateMapEntries produces a small number of entries for map-type schemas
 // (object with additionalProperties but no defined properties).
 func (g *DataGenerator) generateMapEntries(
-	valueSchema *jsonschema.Schema, seed int64, depth int,
+	valueSchema *jsonschema.Schema, seed int64, depth int, recurse int,
 ) (map[string]any, error) {
 	result := make(map[string]any, mapEntryCount)
 
@@ -191,7 +253,7 @@ func (g *DataGenerator) generateMapEntries(
 		valPath := fmt.Sprintf("_val_%d", i)
 		valSeed := FieldSeed(seed, valPath)
 
-		val, err := g.generate(valueSchema, valSeed, "", depth+1)
+		val, err := g.generate(valueSchema, valSeed, "", depth+1, recurse+1)
 		if err != nil {
 			return nil, fmt.Errorf("map entry %d: %w", i, err)
 		}
@@ -207,10 +269,10 @@ func (g *DataGenerator) generateMapEntries(
 // generateArray produces a []any with items generated from the item schema.
 // Tuple schemas (prefixItems or draft-04 Items as []*Schema) generate
 // per-position items from the corresponding schema.
-func (g *DataGenerator) generateArray(schema *jsonschema.Schema, seed int64, depth int) ([]any, error) {
+func (g *DataGenerator) generateArray(schema *jsonschema.Schema, seed int64, depth int, recurse int) ([]any, error) {
 	// Tuple schemas: per-position item schemas.
 	if tupleSchemas := resolveTupleSchemas(schema); len(tupleSchemas) > 0 {
-		return g.generateTuple(tupleSchemas, seed, depth)
+		return g.generateTuple(tupleSchemas, seed, depth, recurse)
 	}
 
 	// Homogeneous arrays: single item schema for all items.
@@ -226,13 +288,13 @@ func (g *DataGenerator) generateArray(schema *jsonschema.Schema, seed int64, dep
 	for i := range length {
 		itemSeed := FieldSeed(seed, strconv.Itoa(i))
 
-		item, err := g.generate(itemSchema, itemSeed, "", depth+1)
+		item, err := g.generate(itemSchema, itemSeed, "", depth+1, recurse+1)
 		if err != nil {
 			return nil, fmt.Errorf("array item %d: %w", i, err)
 		}
 
 		if schema.UniqueItems && containsValue(items, item) {
-			item, err = g.retryUniqueItem(itemSchema, seed, i, items, depth)
+			item, err = g.retryUniqueItem(itemSchema, seed, i, items, depth, recurse)
 			if err != nil {
 				return nil, fmt.Errorf("array item %d unique retry: %w", i, err)
 			}
@@ -247,14 +309,14 @@ func (g *DataGenerator) generateArray(schema *jsonschema.Schema, seed int64, dep
 // generateTuple produces a []any with per-position items from the given
 // schemas (one schema per array position).
 func (g *DataGenerator) generateTuple(
-	schemas []*jsonschema.Schema, seed int64, depth int,
+	schemas []*jsonschema.Schema, seed int64, depth int, recurse int,
 ) ([]any, error) {
 	items := make([]any, 0, len(schemas))
 
 	for i, itemSchema := range schemas {
 		itemSeed := FieldSeed(seed, strconv.Itoa(i))
 
-		val, err := g.generate(itemSchema, itemSeed, "", depth+1)
+		val, err := g.generate(itemSchema, itemSeed, "", depth+1, recurse+1)
 		if err != nil {
 			return nil, fmt.Errorf("tuple item %d: %w", i, err)
 		}
@@ -269,18 +331,14 @@ func (g *DataGenerator) generateTuple(
 // Returns the first unique value found, or the last attempt if all retries
 // produce duplicates (best-effort). Propagates generation errors.
 func (g *DataGenerator) retryUniqueItem(
-	itemSchema *jsonschema.Schema,
-	seed int64,
-	index int,
-	existing []any,
-	depth int,
+	itemSchema *jsonschema.Schema, seed int64, index int, existing []any, depth int, recurse int,
 ) (any, error) {
 	var lastCandidate any
 
 	for attempt := 1; attempt <= maxUniqueRetries; attempt++ {
 		retrySeed := FieldSeed(seed, fmt.Sprintf("%d_retry_%d", index, attempt))
 
-		candidate, err := g.generate(itemSchema, retrySeed, "", depth+1)
+		candidate, err := g.generate(itemSchema, retrySeed, "", depth+1, recurse+1)
 		if err != nil {
 			return nil, fmt.Errorf("retry %d: %w", attempt, err)
 		}
@@ -363,13 +421,8 @@ func arrayLength(schema *jsonschema.Schema) int {
 // --- Polymorphism ---
 
 // generateAllOf merges data from all sub-schemas. If the parent schema has
-// top-level properties, they are generated first as the base. Returns nil
-// when depth limit is reached (circular allOf termination).
-func (g *DataGenerator) generateAllOf(schema *jsonschema.Schema, seed int64, depth int) (any, error) {
-	if depth >= g.maxDepth {
-		return nil, nil //nolint:nilnil // depth termination for circular allOf
-	}
-
+// top-level properties, they are generated first as the base.
+func (g *DataGenerator) generateAllOf(schema *jsonschema.Schema, seed int64, depth int, recurse int) (any, error) {
 	if len(schema.AllOf) == 0 {
 		return nil, nil //nolint:nilnil // empty allOf
 	}
@@ -378,7 +431,7 @@ func (g *DataGenerator) generateAllOf(schema *jsonschema.Schema, seed int64, dep
 
 	// Generate top-level properties first (if any).
 	if len(schema.Properties) > 0 {
-		base, err := g.generateObject(schema, seed, depth)
+		base, err := g.generateObject(schema, seed, depth, recurse)
 		if err != nil {
 			return nil, err
 		}
@@ -392,7 +445,7 @@ func (g *DataGenerator) generateAllOf(schema *jsonschema.Schema, seed int64, dep
 	for i, sub := range schema.AllOf {
 		subSeed := FieldSeed(seed, fmt.Sprintf("_allOf_%d", i))
 
-		val, err := g.generate(sub, subSeed, "", depth)
+		val, err := g.generate(sub, subSeed, "", depth, recurse+1)
 		if err != nil {
 			return nil, err
 		}
@@ -409,21 +462,16 @@ func (g *DataGenerator) generateAllOf(schema *jsonschema.Schema, seed int64, dep
 }
 
 // generateBranch selects one branch deterministically from oneOf or anyOf.
-// Returns nil when depth limit is reached (circular oneOf/anyOf termination).
 func (g *DataGenerator) generateBranch(
-	schemas []*jsonschema.Schema, seed int64, fieldName string, depth int,
+	schemas []*jsonschema.Schema, seed int64, fieldName string, depth int, recurse int,
 ) (any, error) {
-	if depth >= g.maxDepth {
-		return nil, nil //nolint:nilnil // depth termination for circular oneOf/anyOf
-	}
-
 	if len(schemas) == 0 {
 		return nil, nil //nolint:nilnil // empty oneOf/anyOf
 	}
 
 	idx := absModLen(seed, len(schemas))
 
-	return g.generate(schemas[idx], seed, fieldName, depth)
+	return g.generate(schemas[idx], seed, fieldName, depth, recurse+1)
 }
 
 // mergeMaps copies all entries from src into dst (last-write-wins).
@@ -472,4 +520,14 @@ func resolveComplexType(schema *jsonschema.Schema) string {
 
 	// Fall back to primitive type inference.
 	return resolveType(schema)
+}
+
+// schemaID returns a short identifier for a schema, useful for log messages.
+// Prefers the schema Location (JSON pointer), falling back to "anonymous".
+func schemaID(schema *jsonschema.Schema) string {
+	if schema.Location != "" {
+		return schema.Location
+	}
+
+	return "anonymous"
 }

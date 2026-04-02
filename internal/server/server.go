@@ -99,7 +99,7 @@ func Build(ctx context.Context, specBytes []byte, cfg Config) (http.Handler, *St
 
 	// Create remaining runtime dependencies.
 	responder := merrors.NewResponder()
-	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), cfg.MaxDepth)
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), cfg.MaxDepth, logger)
 
 	// Wire router.
 	handler := router.NewHandler(bm, v, responder, gen, cfg.Strict, logger)

@@ -130,7 +130,7 @@ func testBehaviorMap() *model.BehaviorMap {
 
 func newTestHandler(v validator.RequestValidator) *Handler {
 	resp := merrors.NewResponder()
-	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0)
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
 
 	return NewHandler(testBehaviorMap(), v, resp, gen, false, nil)
 }
@@ -428,7 +428,7 @@ func TestHandler_NilSchemaReturnsEmptyObject(t *testing.T) {
 	})
 
 	resp := merrors.NewResponder()
-	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0)
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
 	h := NewHandler(bm, &stubValidator{}, resp, gen, false, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/empty", nil)
