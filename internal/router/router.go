@@ -6,6 +6,7 @@ package router
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -26,28 +27,40 @@ const maxBodySize = 10 * 1024 * 1024
 // contentTypeJSON is the standard JSON content type.
 const contentTypeJSON = "application/json"
 
-// Handler serves mock HTTP responses by matching requests to OpenAPI
-// operations and orchestrating the runtime pipeline.
-type Handler struct {
-	mux       *http.ServeMux
-	responder merrors.Responder
-	strict    bool
-}
+type (
+	// Handler serves mock HTTP responses by matching requests to OpenAPI
+	// operations and orchestrating the runtime pipeline.
+	Handler struct {
+		mux       *http.ServeMux
+		responder merrors.Responder
+		logger    *slog.Logger
+		strict    bool
+	}
+
+	// discardHandler is a slog.Handler that discards all log output.
+	discardHandler struct{}
+)
 
 // NewHandler creates a Handler that routes requests based on the given
 // BehaviorMap. All dependencies are injected: validator for request
 // validation, responder for error responses, generator for response data.
 // When strict is true, response validation failures return 500 instead of
 // logging a warning and sending the response anyway.
+// If logger is nil, a no-op logger is used.
 func NewHandler(
 	behaviorMap *model.BehaviorMap,
 	v validator.RequestValidator,
 	responder merrors.Responder,
 	gen *generator.DataGenerator,
 	strict bool,
+	logger *slog.Logger,
 ) *Handler {
+	if logger == nil {
+		logger = slog.New(discardHandler{})
+	}
+
 	mux := http.NewServeMux()
-	h := &Handler{mux: mux, responder: responder, strict: strict}
+	h := &Handler{mux: mux, responder: responder, logger: logger, strict: strict}
 
 	// Collect entries by path pattern for 405 handling.
 	methodsByPath := make(map[string][]string)
@@ -161,7 +174,7 @@ func (h *Handler) operationHandler(
 
 		seed := generator.Fingerprint(r.Method, r.URL.Path, r.URL.Query(), body)
 
-		writeResponse(w, gen, scenario, seed, h.strict)
+		writeResponse(w, gen, scenario, seed, h.strict, h.logger)
 	}
 }
 
@@ -178,6 +191,7 @@ func writeResponse(
 	scenario *SelectedScenario,
 	seed int64,
 	strict bool,
+	logger *slog.Logger,
 ) {
 	if scenario.StatusCode == http.StatusNoContent {
 		w.WriteHeader(http.StatusNoContent)
@@ -185,7 +199,7 @@ func writeResponse(
 		return
 	}
 
-	responseBody, ok := generateResponseBody(w, gen, scenario, seed, strict)
+	responseBody, ok := generateResponseBody(w, gen, scenario, seed, strict, logger)
 	if !ok {
 		return
 	}
@@ -252,6 +266,7 @@ func generateResponseBody(
 	scenario *SelectedScenario,
 	seed int64,
 	strict bool,
+	logger *slog.Logger,
 ) (any, bool) {
 	if scenario.Schema == nil || scenario.Schema.Schema == nil {
 		return map[string]any{}, true
@@ -272,7 +287,7 @@ func generateResponseBody(
 			return nil, false
 		}
 
-		slog.Warn("generated response does not match schema",
+		logger.Warn("generated response does not match schema",
 			"schema", scenario.Schema.Name,
 			"error", valErr.Error(),
 		)
@@ -296,3 +311,8 @@ func writeProblem(w http.ResponseWriter, status int, detail string) {
 	//nolint:errchkjson // write failures (client disconnect) are unrecoverable
 	_ = json.NewEncoder(w).Encode(pd)
 }
+
+func (discardHandler) Enabled(context.Context, slog.Level) bool  { return false }
+func (discardHandler) Handle(context.Context, slog.Record) error { return nil }
+func (d discardHandler) WithAttrs([]slog.Attr) slog.Handler      { return d }
+func (d discardHandler) WithGroup(string) slog.Handler           { return d }

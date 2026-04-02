@@ -34,6 +34,20 @@ type Result struct {
 	Confidence float64
 }
 
+// ConfidenceLabel maps a confidence score to a human-readable label.
+// Thresholds align with the classifier's internal confidence constants:
+// strong (>=0.8) → "high", moderate (>=0.6) → "medium", weak (<0.6) → "low".
+func ConfidenceLabel(c float64) string {
+	switch {
+	case c >= confidenceStrong:
+		return "high"
+	case c >= confidenceModerate:
+		return "medium"
+	default:
+		return "low"
+	}
+}
+
 // Classifier infers CRUD behavior types from OpenAPI operation metadata
 // using a layered heuristic approach. The pipeline runs L1 -> L2 -> L3
 // sequentially, with each layer able to confirm, override, or pass

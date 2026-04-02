@@ -132,7 +132,7 @@ func newTestHandler(v validator.RequestValidator) *Handler {
 	resp := merrors.NewResponder()
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0)
 
-	return NewHandler(testBehaviorMap(), v, resp, gen, false)
+	return NewHandler(testBehaviorMap(), v, resp, gen, false, nil)
 }
 
 // parseProblemDetail decodes an RFC 7807 response body.
@@ -429,7 +429,7 @@ func TestHandler_NilSchemaReturnsEmptyObject(t *testing.T) {
 
 	resp := merrors.NewResponder()
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0)
-	h := NewHandler(bm, &stubValidator{}, resp, gen, false)
+	h := NewHandler(bm, &stubValidator{}, resp, gen, false, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/empty", nil)
 	rec := httptest.NewRecorder()

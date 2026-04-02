@@ -52,6 +52,7 @@ linters:
           - intrange
           - noinlineerr
           - goconst
+          - ireturn
 
 issues:
   max-issues-per-linter: 20

@@ -231,15 +231,17 @@ func buildResponseSchemas(
 		schemas[code] = compiled
 	}
 
-	// Default response at key 0.
-	if op.DefaultResponse != nil && op.DefaultResponse.Schema != nil && sc != nil {
-		compiled := compileSchema(sc, op.DefaultResponse.Schema, op, logger)
-		if compiled != nil {
-			if schemas == nil {
-				schemas = make(map[int]*model.CompiledSchema)
-			}
+	// Default response at key 0 — same logic as the status-code loop above:
+	// key presence means "defined in spec," nil value means "no schema."
+	if op.DefaultResponse != nil {
+		if schemas == nil {
+			schemas = make(map[int]*model.CompiledSchema)
+		}
 
-			schemas[0] = compiled
+		if op.DefaultResponse.Schema == nil || sc == nil {
+			schemas[0] = nil
+		} else {
+			schemas[0] = compileSchema(sc, op.DefaultResponse.Schema, op, logger)
 		}
 	}
 

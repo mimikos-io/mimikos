@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/mimikos-io/mimikos/internal/parser"
+	"github.com/pb33f/libopenapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,12 +39,31 @@ func parseSpec(t *testing.T, name string) ([]byte, *parser.ParsedSpec) {
 	t.Helper()
 
 	data := loadSpec(t, name)
+
+	doc, err := libopenapi.NewDocument(data)
+	require.NoError(t, err)
+
 	p := parser.NewLibopenAPIParser(nil)
 
-	spec, err := p.Parse(context.Background(), data)
+	spec, err := p.Parse(context.Background(), doc)
 	require.NoError(t, err)
 
 	return data, spec
+}
+
+// parseInlineSpec creates a document and parses inline spec bytes.
+func parseInlineSpec(t *testing.T, specBytes []byte) *parser.ParsedSpec {
+	t.Helper()
+
+	doc, err := libopenapi.NewDocument(specBytes)
+	require.NoError(t, err)
+
+	p := parser.NewLibopenAPIParser(nil)
+
+	spec, err := p.Parse(context.Background(), doc)
+	require.NoError(t, err)
+
+	return spec
 }
 
 // unmarshalJSON is a helper to unmarshal a JSON string into any for validation.
@@ -189,9 +209,7 @@ components:
           minimum: 0
           maximum: 100`)
 
-	p := parser.NewLibopenAPIParser(nil)
-	spec, err := p.Parse(context.Background(), specBytes)
-	require.NoError(t, err)
+	spec := parseInlineSpec(t, specBytes)
 
 	sc, err := New(specBytes, spec.Version)
 	require.NoError(t, err)
@@ -325,9 +343,7 @@ components:
           type: string
           nullable: true`)
 
-	p := parser.NewLibopenAPIParser(nil)
-	spec, err := p.Parse(context.Background(), specBytes)
-	require.NoError(t, err)
+	spec := parseInlineSpec(t, specBytes)
 
 	sc, err := New(specBytes, spec.Version)
 	require.NoError(t, err)
@@ -386,9 +402,7 @@ components:
         name:
           type: string`)
 
-	p := parser.NewLibopenAPIParser(nil)
-	spec, err := p.Parse(context.Background(), specBytes)
-	require.NoError(t, err)
+	spec := parseInlineSpec(t, specBytes)
 
 	sc, err := New(specBytes, spec.Version)
 	require.NoError(t, err)
@@ -444,9 +458,7 @@ components:
           maximum: 10
           exclusiveMaximum: true`)
 
-	p := parser.NewLibopenAPIParser(nil)
-	spec, err := p.Parse(context.Background(), specBytes)
-	require.NoError(t, err)
+	spec := parseInlineSpec(t, specBytes)
 
 	sc, err := New(specBytes, spec.Version)
 	require.NoError(t, err)
@@ -504,9 +516,7 @@ components:
           maximum: 10
           exclusiveMaximum: false`)
 
-	p := parser.NewLibopenAPIParser(nil)
-	spec, err := p.Parse(context.Background(), specBytes)
-	require.NoError(t, err)
+	spec := parseInlineSpec(t, specBytes)
 
 	sc, err := New(specBytes, spec.Version)
 	require.NoError(t, err)
@@ -558,9 +568,7 @@ paths:
                     id:
                       type: integer`)
 
-	p := parser.NewLibopenAPIParser(nil)
-	spec, err := p.Parse(context.Background(), specBytes)
-	require.NoError(t, err)
+	spec := parseInlineSpec(t, specBytes)
 
 	sc, err := New(specBytes, spec.Version)
 	require.NoError(t, err)
@@ -655,9 +663,7 @@ paths:
         "201":
           description: Created`)
 
-	p := parser.NewLibopenAPIParser(nil)
-	spec, err := p.Parse(context.Background(), specBytes)
-	require.NoError(t, err)
+	spec := parseInlineSpec(t, specBytes)
 
 	// Inline response schema.
 	respRef := spec.Operations[0].Responses[200].Schema
@@ -689,9 +695,7 @@ paths:
                 items:
                   type: string`)
 
-	p := parser.NewLibopenAPIParser(nil)
-	spec, err := p.Parse(context.Background(), specBytes)
-	require.NoError(t, err)
+	spec := parseInlineSpec(t, specBytes)
 
 	ref := spec.Operations[0].Responses[200].Schema
 	require.NotNil(t, ref)

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/mimikos-io/mimikos/internal/parser"
+	"github.com/pb33f/libopenapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -98,7 +99,10 @@ func TestCorpusAccuracy(t *testing.T) {
 		specData, err := os.ReadFile(specPath)
 		require.NoError(t, err, "reading spec %s", specName)
 
-		spec, err := p.Parse(context.Background(), specData)
+		doc, docErr := libopenapi.NewDocument(specData)
+		require.NoError(t, docErr, "creating document for %s", specName)
+
+		spec, err := p.Parse(context.Background(), doc)
 		require.NoError(t, err, "parsing spec %s", specName)
 
 		var (

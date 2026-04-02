@@ -13,8 +13,6 @@ import (
 )
 
 // loadTestDoc loads a libopenapi.Document from the validation test spec.
-//
-//nolint:ireturn // libopenapi.NewDocument returns the Document interface
 func loadTestDoc(t *testing.T) libopenapi.Document {
 	t.Helper()
 

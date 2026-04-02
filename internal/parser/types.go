@@ -10,7 +10,7 @@ import (
 
 type (
 	// ParsedSpec is the normalized output of parsing an OpenAPI specification.
-	// It contains all information needed by the Behavior Classifier (Task 7)
+	// It contains all information needed by the Behavior Classifier
 	// and Schema Compiler (Session 10).
 	ParsedSpec struct {
 		// Version is the OpenAPI version string (e.g., "3.0.0", "3.1.0").
@@ -103,7 +103,7 @@ type (
 		// Raw is the resolved libopenapi schema. All $ref pointers have been
 		// followed — this is the concrete schema, never a proxy.
 		//
-		// Used by the Data Generator (Task 8) for structural schema access.
+		// Used by the Data Generator for structural schema access.
 		Raw *base.Schema
 
 		// Pointer is the JSON pointer to this schema within the original spec
@@ -142,10 +142,8 @@ type (
 
 // Sentinel errors for parser failures.
 var (
-	// ErrEmptyInput is returned when the input data is empty or nil.
-	ErrEmptyInput = errors.New("parser: empty input")
-
-	// ErrInvalidSpec is returned when the input is not a valid OpenAPI spec.
+	// ErrInvalidSpec is returned when the document is not a valid OpenAPI 3.x spec
+	// (e.g., version string is empty or unrecognized).
 	ErrInvalidSpec = errors.New("parser: invalid OpenAPI spec")
 
 	// ErrUnsupportedVersion is returned for OpenAPI 2.0 (Swagger) or unrecognized versions.

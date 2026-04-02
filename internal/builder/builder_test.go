@@ -15,6 +15,7 @@ import (
 	"github.com/mimikos-io/mimikos/internal/compiler"
 	"github.com/mimikos-io/mimikos/internal/model"
 	"github.com/mimikos-io/mimikos/internal/parser"
+	"github.com/pb33f/libopenapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -294,6 +295,39 @@ func TestBuildBehaviorMap_SchemalessResponsesAsNilEntries(t *testing.T) {
 		assert.True(t, exists, "status %d should be present in ResponseSchemas", code)
 		assert.Nil(t, schema, "status %d should have nil schema (no schema defined)", code)
 	}
+}
+
+func TestBuildBehaviorMap_SchemalessDefaultResponseGetsKey0(t *testing.T) {
+	// A default response with no schema should still appear as key 0
+	// in ResponseSchemas with nil value, matching the status-code loop
+	// behavior (Decision #62: key present = defined in spec).
+	spec := &parser.ParsedSpec{
+		Operations: []parser.Operation{
+			{
+				Method: http.MethodGet,
+				Path:   "/pets",
+				Responses: map[int]*parser.Response{
+					http.StatusOK: {StatusCode: http.StatusOK},
+				},
+				DefaultResponse: &parser.Response{
+					StatusCode:  0,
+					Description: "Error",
+					// No Schema — description-only default.
+				},
+			},
+		},
+	}
+
+	bm, err := BuildBehaviorMap(spec, classifier.New(), nil, nil)
+	require.NoError(t, err)
+
+	entry, ok := bm.Get(http.MethodGet, "/pets")
+	require.True(t, ok)
+	require.NotNil(t, entry.ResponseSchemas)
+
+	schema, exists := entry.ResponseSchemas[0]
+	assert.True(t, exists, "default response should be present at key 0")
+	assert.Nil(t, schema, "schema-less default should have nil value")
 }
 
 func TestBuildBehaviorMap_ConfidencePreserved(t *testing.T) {
@@ -669,8 +703,11 @@ func TestCorpusBuildBehaviorMap(t *testing.T) {
 		specData, readErr := os.ReadFile(specPath)
 		require.NoError(t, readErr, "reading spec %s", specName)
 
-		// Full pipeline: parse → compile → build.
-		spec, parseErr := p.Parse(context.Background(), specData)
+		// Full pipeline: document → parse → compile → build.
+		doc, docErr := libopenapi.NewDocument(specData)
+		require.NoError(t, docErr, "creating document for %s", specName)
+
+		spec, parseErr := p.Parse(context.Background(), doc)
 		require.NoError(t, parseErr, "parsing spec %s", specName)
 
 		sc, compileErr := compiler.New(specData, spec.Version)
