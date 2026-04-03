@@ -53,8 +53,13 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Run unit tests
-        run: make run test unit
+      - name: Run tests with coverage
+        run: go test -v -coverprofile=coverage.out -covermode=atomic -timeout=10m ./...
 
-      - name: Run integration tests
-        run: make run test integration
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.out
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: mimikos-io/mimikos
