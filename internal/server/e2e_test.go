@@ -13,9 +13,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// skipIfShort skips e2e tests in short mode. E2E tests parse full OpenAPI
+// specs and run the complete startup pipeline — too slow for rapid iteration.
+func skipIfShort(t *testing.T) {
+	t.Helper()
+
+	if testing.Short() {
+		t.Skip("skipping e2e test in short mode")
+	}
+}
+
 // --- Petstore 3.0 End-to-End Tests ---
 
 func TestE2E_Petstore30_ListPets(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "petstore-3.0.yaml")
 	defer srv.Close()
 
@@ -38,6 +50,8 @@ func TestE2E_Petstore30_ListPets(t *testing.T) {
 }
 
 func TestE2E_Petstore30_CreatePet(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "petstore-3.0.yaml")
 	defer srv.Close()
 
@@ -49,6 +63,8 @@ func TestE2E_Petstore30_CreatePet(t *testing.T) {
 }
 
 func TestE2E_Petstore30_GetPetById(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "petstore-3.0.yaml")
 	defer srv.Close()
 
@@ -66,6 +82,8 @@ func TestE2E_Petstore30_GetPetById(t *testing.T) {
 }
 
 func TestE2E_Petstore30_InvalidCreate_MissingRequired(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "petstore-3.0.yaml")
 	defer srv.Close()
 
@@ -82,6 +100,8 @@ func TestE2E_Petstore30_InvalidCreate_MissingRequired(t *testing.T) {
 }
 
 func TestE2E_Petstore30_NotFound(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "petstore-3.0.yaml")
 	defer srv.Close()
 
@@ -93,6 +113,8 @@ func TestE2E_Petstore30_NotFound(t *testing.T) {
 }
 
 func TestE2E_Petstore30_MethodNotAllowed(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "petstore-3.0.yaml")
 	defer srv.Close()
 
@@ -104,6 +126,8 @@ func TestE2E_Petstore30_MethodNotAllowed(t *testing.T) {
 }
 
 func TestE2E_Petstore30_Determinism(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "petstore-3.0.yaml")
 	defer srv.Close()
 
@@ -114,6 +138,8 @@ func TestE2E_Petstore30_Determinism(t *testing.T) {
 }
 
 func TestE2E_Petstore30_ExplicitStatus_SuccessCode(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "petstore-3.0.yaml")
 	defer srv.Close()
 
@@ -142,6 +168,8 @@ func TestE2E_Petstore30_ExplicitStatus_SuccessCode(t *testing.T) {
 // --- Petstore 3.1 (Complex + 3.1 Features) ---
 
 func TestE2E_Petstore31_ListPets(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "petstore-3.1.yaml")
 	defer srv.Close()
 
@@ -162,6 +190,8 @@ func TestE2E_Petstore31_ListPets(t *testing.T) {
 }
 
 func TestE2E_Petstore31_CreatePet(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "petstore-3.1.yaml")
 	defer srv.Close()
 
@@ -180,6 +210,8 @@ func TestE2E_Petstore31_CreatePet(t *testing.T) {
 }
 
 func TestE2E_Petstore31_GetPetById(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "petstore-3.1.yaml")
 	defer srv.Close()
 
@@ -196,6 +228,8 @@ func TestE2E_Petstore31_GetPetById(t *testing.T) {
 }
 
 func TestE2E_Petstore31_DeletePet(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "petstore-3.1.yaml")
 	defer srv.Close()
 
@@ -211,6 +245,8 @@ func TestE2E_Petstore31_DeletePet(t *testing.T) {
 }
 
 func TestE2E_Petstore31_UpdatePet(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "petstore-3.1.yaml")
 	defer srv.Close()
 
@@ -228,6 +264,8 @@ func TestE2E_Petstore31_UpdatePet(t *testing.T) {
 }
 
 func TestE2E_Petstore31_NullableField(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "petstore-3.1.yaml")
 	defer srv.Close()
 
@@ -256,6 +294,8 @@ func TestE2E_Petstore31_NullableField(t *testing.T) {
 }
 
 func TestE2E_Petstore31_PolymorphicField(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "petstore-3.1.yaml")
 	defer srv.Close()
 
@@ -297,6 +337,8 @@ func TestE2E_Petstore31_PolymorphicField(t *testing.T) {
 }
 
 func TestE2E_Petstore31_Determinism(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "petstore-3.1.yaml")
 	defer srv.Close()
 
@@ -307,6 +349,8 @@ func TestE2E_Petstore31_Determinism(t *testing.T) {
 }
 
 func TestE2E_Petstore31_3031Parity(t *testing.T) {
+	skipIfShort(t)
+
 	// Both specs define GET /pets → list, GET /pets/{petId} → fetch.
 	// Behavioral classification should be the same.
 	srv30 := buildTestServer(t, "petstore-3.0.yaml")
@@ -360,6 +404,8 @@ func TestE2E_Petstore31_3031Parity(t *testing.T) {
 // --- Complex Spec (Asana) ---
 
 func TestE2E_Asana_BuildSucceeds(t *testing.T) {
+	skipIfShort(t)
+
 	// Asana has 167 operations — verify the full pipeline builds without error.
 	specBytes := loadSpecBytes(t, "asana.yaml")
 
@@ -373,6 +419,8 @@ func TestE2E_Asana_BuildSucceeds(t *testing.T) {
 }
 
 func TestE2E_Petstore31_StrictMode(t *testing.T) {
+	skipIfShort(t)
+
 	// Strict mode enables response validation — every generated response is
 	// checked against the compiled JSON Schema. A non-500 in strict mode
 	// proves the generated data is schema-valid end-to-end.
@@ -418,6 +466,8 @@ func TestE2E_Petstore31_StrictMode(t *testing.T) {
 }
 
 func TestE2E_Asana_StrictMode(t *testing.T) {
+	skipIfShort(t)
+
 	specBytes := loadSpecBytes(t, "asana.yaml")
 
 	handler, _, err := Build(context.Background(), specBytes, Config{Strict: true})
@@ -468,6 +518,8 @@ func TestE2E_Asana_StrictMode(t *testing.T) {
 }
 
 func TestE2E_Asana_ListTasks(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "asana.yaml")
 	defer srv.Close()
 
@@ -496,6 +548,8 @@ func TestE2E_Asana_ListTasks(t *testing.T) {
 }
 
 func TestE2E_Asana_NestedResource(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "asana.yaml")
 	defer srv.Close()
 
@@ -522,6 +576,8 @@ func TestE2E_Asana_NestedResource(t *testing.T) {
 }
 
 func TestE2E_Asana_FetchSingleResource(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "asana.yaml")
 	defer srv.Close()
 
@@ -547,6 +603,8 @@ func TestE2E_Asana_FetchSingleResource(t *testing.T) {
 }
 
 func TestE2E_Asana_ActionEndpoint(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "asana.yaml")
 	defer srv.Close()
 
@@ -562,6 +620,8 @@ func TestE2E_Asana_ActionEndpoint(t *testing.T) {
 }
 
 func TestE2E_Asana_ExplicitStatus_404(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "asana.yaml")
 	defer srv.Close()
 
@@ -581,6 +641,8 @@ func TestE2E_Asana_ExplicitStatus_404(t *testing.T) {
 }
 
 func TestE2E_Asana_ExplicitStatus_500(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "asana.yaml")
 	defer srv.Close()
 
@@ -599,6 +661,8 @@ func TestE2E_Asana_ExplicitStatus_500(t *testing.T) {
 }
 
 func TestE2E_Asana_ExplicitStatus_UndefinedCode(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "asana.yaml")
 	defer srv.Close()
 
@@ -611,6 +675,8 @@ func TestE2E_Asana_ExplicitStatus_UndefinedCode(t *testing.T) {
 }
 
 func TestE2E_Asana_ExplicitStatus_InvalidValue(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "asana.yaml")
 	defer srv.Close()
 
@@ -623,6 +689,8 @@ func TestE2E_Asana_ExplicitStatus_InvalidValue(t *testing.T) {
 }
 
 func TestE2E_Asana_ExplicitStatus_SuccessCodeExplicit(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "asana.yaml")
 	defer srv.Close()
 
@@ -636,6 +704,8 @@ func TestE2E_Asana_ExplicitStatus_SuccessCodeExplicit(t *testing.T) {
 }
 
 func TestE2E_Asana_ExplicitStatus_Determinism(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "asana.yaml")
 	defer srv.Close()
 
@@ -648,6 +718,8 @@ func TestE2E_Asana_ExplicitStatus_Determinism(t *testing.T) {
 }
 
 func TestE2E_Asana_Determinism(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "asana.yaml")
 	defer srv.Close()
 
@@ -661,6 +733,8 @@ func TestE2E_Asana_Determinism(t *testing.T) {
 // --- Error Scenarios ---
 
 func TestE2E_Error_WrongContentType(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "validation-test.yaml")
 	defer srv.Close()
 
@@ -681,6 +755,8 @@ func TestE2E_Error_WrongContentType(t *testing.T) {
 }
 
 func TestE2E_Error_MissingRequiredFields(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "validation-test.yaml")
 	defer srv.Close()
 
@@ -706,6 +782,8 @@ func TestE2E_Error_MissingRequiredFields(t *testing.T) {
 }
 
 func TestE2E_Error_TypeMismatch(t *testing.T) {
+	skipIfShort(t)
+
 	srv := buildTestServer(t, "validation-test.yaml")
 	defer srv.Close()
 
@@ -721,6 +799,8 @@ func TestE2E_Error_TypeMismatch(t *testing.T) {
 // --- X-Mimikos-Status: Schema-less Fallback ---
 
 func TestE2E_ExplicitStatus_SchemalessError_RFC7807Fallback(t *testing.T) {
+	skipIfShort(t)
+
 	// This test requires e2e-status-test.yaml because it defines a 422 response
 	// with no body schema. Asana cannot test this path — all its error responses
 	// have ErrorResponse schemas. This exercises router.writeErrorFallback.
@@ -745,6 +825,8 @@ func TestE2E_ExplicitStatus_SchemalessError_RFC7807Fallback(t *testing.T) {
 // per-field sub-seeding (Decision #3, #34): field_seed = hash(request_seed +
 // field_path), so each field's value depends only on its own path.
 func TestE2E_SubSeedStability(t *testing.T) {
+	skipIfShort(t)
+
 	// Original spec: Pet has {id, name, tag, status, metadata}.
 	originalSpec := loadSpecBytes(t, "petstore-3.1.yaml")
 

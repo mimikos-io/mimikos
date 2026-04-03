@@ -35,7 +35,12 @@ checksum:
   name_template: "checksums.txt"
 
 changelog:
-  disable: true
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
 
 release:
   github:

@@ -6,6 +6,7 @@
 [![Go Version](https://img.shields.io/badge/Go-1.25+-blue.svg)](https://golang.org)
 [![Status](https://img.shields.io/badge/Status-MVP-blue.svg)]()
 [![Go Report Card](https://goreportcard.com/badge/github.com/mimikos-io/mimikos)](https://goreportcard.com/report/github.com/mimikos-io/mimikos)
+[![codecov](https://codecov.io/github/mimikos-io/mimikos/graph/badge.svg?token=WZ4E26OXM8)](https://codecov.io/github/mimikos-io/mimikos)
 
 ---
 
