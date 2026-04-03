@@ -1,0 +1,44 @@
+version: 2
+
+project_name: mimikos
+
+builds:
+  - id: mimikos
+    main: ./cmd/mimikos
+    binary: mimikos
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.gitCommit={{.ShortCommit}}
+      - -X 'main.buildTime={{.Date}}'
+
+archives:
+  - id: mimikos
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  disable: true
+
+release:
+  github:
+    owner: mimikos-io
+    name: mimikos
+  prerelease: auto

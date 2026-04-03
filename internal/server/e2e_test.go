@@ -738,6 +738,51 @@ func TestE2E_ExplicitStatus_SchemalessError_RFC7807Fallback(t *testing.T) {
 	assertStatusField(t, problem, http.StatusUnprocessableEntity)
 }
 
+// --- Sub-Seeding Stability ---
+
+// TestE2E_SubSeedStability verifies that adding a new field to a schema does
+// not change the values of existing fields. This is the core property of
+// per-field sub-seeding (Decision #3, #34): field_seed = hash(request_seed +
+// field_path), so each field's value depends only on its own path.
+func TestE2E_SubSeedStability(t *testing.T) {
+	// Original spec: Pet has {id, name, tag, status, metadata}.
+	originalSpec := loadSpecBytes(t, "petstore-3.1.yaml")
+
+	// Modified spec: Pet gains an extra field "breed".
+	modifiedSpec := addBreedField(t, originalSpec)
+
+	origHandler, _, err := Build(context.Background(), originalSpec, Config{})
+	require.NoError(t, err)
+
+	modHandler, _, err := Build(context.Background(), modifiedSpec, Config{})
+	require.NoError(t, err)
+
+	origSrv := httptest.NewServer(origHandler)
+	defer origSrv.Close()
+
+	modSrv := httptest.NewServer(modHandler)
+	defer modSrv.Close()
+
+	paths := []string{"/pets/42", "/pets/1", "/pets/99"}
+
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			origPet := getJSONObject(t, origSrv, path)
+			modPet := getJSONObject(t, modSrv, path)
+
+			// The modified spec should have the new field.
+			assert.Contains(t, modPet, "breed",
+				"modified spec should produce the new 'breed' field")
+
+			// All original fields must retain their exact values.
+			for _, field := range []string{"id", "name"} {
+				assert.Equal(t, origPet[field], modPet[field],
+					"field %q changed after adding 'breed' — sub-seeding is broken", field)
+			}
+		})
+	}
+}
+
 // --- Test Helpers (E2E-specific; shared helpers are in helpers_test.go) ---
 
 // doJSONRequest performs an HTTP request with a JSON body.
@@ -848,4 +893,38 @@ func assertStatusField(t *testing.T, problem map[string]any, expected int) {
 	statusNum, ok := status.(float64)
 	require.True(t, ok, "status should be a number, got %T", status)
 	assert.InDelta(t, float64(expected), statusNum, 0.1, "status code mismatch")
+}
+
+// getJSONObject performs a GET request and decodes the response as a JSON object.
+func getJSONObject(t *testing.T, srv *httptest.Server, path string) map[string]any {
+	t.Helper()
+
+	raw := doGetBody(t, srv, path)
+
+	var obj map[string]any
+	require.NoError(t, json.Unmarshal([]byte(raw), &obj))
+
+	return obj
+}
+
+// addBreedField adds a "breed" string property to the Pet schema in the
+// petstore spec. Used by TestE2E_SubSeedStability to verify that adding a
+// field does not change existing field values.
+func addBreedField(t *testing.T, spec []byte) []byte {
+	t.Helper()
+
+	original := string(spec)
+
+	target := "        tag:\n          type:\n" +
+		"            - string\n            - \"null\""
+	replacement := "        breed:\n          type: string\n" +
+		"        tag:\n          type:\n" +
+		"            - string\n            - \"null\""
+
+	modified := strings.Replace(original, target, replacement, 1)
+
+	require.NotEqual(t, original, modified,
+		"failed to insert 'breed' field — spec format may have changed")
+
+	return []byte(modified)
 }

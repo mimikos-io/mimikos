@@ -205,8 +205,8 @@ func (g *DataGenerator) generateObject(
 ) (map[string]any, error) {
 	// Map-type schema: no defined properties, but additionalProperties is a schema.
 	if len(schema.Properties) == 0 {
-		if addlSchema, ok := schema.AdditionalProperties.(*jsonschema.Schema); ok {
-			return g.generateMapEntries(addlSchema, seed, depth, recurse)
+		if ap, ok := schema.AdditionalProperties.(*jsonschema.Schema); ok {
+			return g.generateMapEntries(ap, seed, depth, recurse)
 		}
 
 		return map[string]any{}, nil

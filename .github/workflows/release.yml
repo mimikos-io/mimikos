@@ -1,0 +1,140 @@
+name: Release
+
+on:
+  # trigger 1: automatic release on PR merge (branch-naming convention)
+  pull_request:
+    types: [closed]
+
+  # trigger 2: manual release via tag push
+  push:
+    tags:
+      - "v*"
+
+env:
+  GO_VERSION: "1.25"
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+
+    # Run when: (a) a versioned PR is merged, or (b) a tag is pushed
+    if: |
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true &&
+       (startsWith(github.head_ref, 'minor/') || startsWith(github.head_ref, 'patch/') || startsWith(github.head_ref, 'major/')))
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      # --- Branch-naming path: calculate and create tag ---
+
+      - name: Get latest tag
+        if: github.event_name == 'pull_request'
+        id: latest_tag
+        run: |
+          latest=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "tag=$latest" >> "$GITHUB_OUTPUT"
+          echo "Latest tag: $latest"
+
+      - name: Calculate next version
+        if: github.event_name == 'pull_request'
+        id: next_version
+        run: |
+          latest="${{ steps.latest_tag.outputs.tag }}"
+          # Strip leading 'v'
+          version="${latest#v}"
+          IFS='.' read -r major minor patch <<< "$version"
+
+          branch="${{ github.head_ref }}"
+          prefix="${branch%%/*}"
+
+          case "$prefix" in
+            major)
+              major=$((major + 1))
+              minor=0
+              patch=0
+              ;;
+            minor)
+              minor=$((minor + 1))
+              patch=0
+              ;;
+            patch)
+              patch=$((patch + 1))
+              ;;
+          esac
+
+          next="v${major}.${minor}.${patch}"
+          echo "version=$next" >> "$GITHUB_OUTPUT"
+          echo "Next version: $next (from $prefix/ branch)"
+
+      - name: Create and push tag
+        if: github.event_name == 'pull_request'
+        run: |
+          git config user.name "${{ github.event.pull_request.user.login }}"
+          git config user.email "${{ secrets.DEFAULT_EMAIL }}"
+          git tag "${{ steps.next_version.outputs.version }}"
+          git push origin "${{ steps.next_version.outputs.version }}"
+
+      # --- Extract release notes from CHANGELOG.md ---
+
+      - name: Determine version tag
+        id: version_tag
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          else
+            tag="${{ steps.next_version.outputs.version }}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $tag"
+
+      - name: Extract release notes from CHANGELOG
+        id: release_notes
+        run: |
+          version="${{ steps.version_tag.outputs.tag }}"
+          version="${version#v}"
+
+          # Extract the section for this version from CHANGELOG.md.
+          # Matches from "## [X.Y.Z]" until the next "## [" or end of file.
+          # Skips link reference lines (e.g., [0.1.0]: https://...).
+          notes=$(awk -v ver="$version" '
+            /^## \[/ {
+              if (found) exit
+              if (index($0, "[" ver "]")) found=1
+              next
+            }
+            found && /^\[/ { next }
+            found { print }
+          ' CHANGELOG.md)
+
+          if [ -z "$notes" ]; then
+            echo "WARNING: No changelog entry found for version $version"
+            notes="Release $version"
+          fi
+
+          # Write to file for GoReleaser
+          echo "$notes" > /tmp/release-notes.md
+          echo "Extracted release notes for $version"
+
+      # --- GoReleaser: runs for both paths ---
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean --release-notes /tmp/release-notes.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
