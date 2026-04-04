@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-04-04
+
+### Added
+
+#### Stateful CRUD Mode
+- `--mode stateful` flag enables state-aware mock responses for testing CRUD workflows
+- Default mode remains `deterministic` — existing behavior is unchanged when upgrading from 0.1.0
+- POST creates resources in an in-memory store, returns 201 with generated body
+- GET retrieves stored resources by ID, returns 404 if not found
+- GET on collection endpoints returns all stored resources of that type (empty array until first POST — unlike deterministic mode which always generates data)
+- PUT and PATCH use shallow merge: request fields overwrite stored fields, unmentioned fields preserved; returns 404 if the resource does not exist (no upsert)
+- DELETE removes resources from store, returns 204 (or 404 if missing)
+- Generic behavior types fall through to deterministic generation
+
+#### State Store
+- In-memory state store keyed by resource type + resource ID
+- LRU eviction when `--max-resources` capacity is reached (default: 10,000)
+- Resource identity inference: top-level `id` field → last path parameter → deterministic UUID fallback
+- Resource type derived from URL path pattern (collection segment preceding last path parameter)
+- Server restart clears all state
+
+#### Mode Integration
+- `--mode` flag selects operating mode (`deterministic` or `stateful`, default: `deterministic`)
+- `--max-resources` flag to configure state store capacity
+- `X-Mimikos-Status` header bypasses stateful logic — uses deterministic generation, no state mutation
+- Request validation runs before stateful logic (invalid requests still return 400)
+- Startup banner shows active operating mode
+
 ## [0.1.0] - 2026-04-03
 
 First public release. Stateless behavioral mocking with deterministic, schema-valid response generation

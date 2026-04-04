@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mimikos-io/mimikos/internal/model"
 	"github.com/mimikos-io/mimikos/internal/server"
 )
 
@@ -40,6 +41,9 @@ const defaultPort = 8080
 
 // defaultMaxDepth is the default maximum recursion depth for data generation.
 const defaultMaxDepth = 3
+
+// defaultMaxResources is the default state store capacity for stateful mode.
+const defaultMaxResources = 10_000
 
 // maxPort is the maximum valid TCP port number.
 const maxPort = 65535
@@ -81,11 +85,13 @@ func run(args []string, out *os.File) int {
 
 // startConfig holds parsed and validated "start" subcommand configuration.
 type startConfig struct {
-	specPath string
-	port     int
-	strict   bool
-	maxDepth int
-	level    slog.Level
+	specPath     string
+	port         int
+	strict       bool
+	maxDepth     int
+	maxResources int
+	level        slog.Level
+	mode         model.OperatingMode
 }
 
 // parseStartFlags parses and validates CLI flags for the "start" subcommand.
@@ -97,7 +103,9 @@ func parseStartFlags(args []string, out *os.File) *startConfig {
 	port := fs.Int("port", defaultPort, "server port")
 	strict := fs.Bool("strict", false, "return 500 if response fails schema validation")
 	maxDepth := fs.Int("max-depth", defaultMaxDepth, "max recursion depth for circular schemas")
+	maxResources := fs.Int("max-resources", defaultMaxResources, "max stored resources in stateful mode")
 	logLevel := fs.String("log-level", "info", "logging verbosity (debug, info, warn, error)")
+	modeStr := fs.String("mode", "deterministic", "operating mode (deterministic, stateful)")
 
 	if err := fs.Parse(args); err != nil {
 		// flag.ContinueOnError: Parse already printed the error + usage.
@@ -119,6 +127,13 @@ func parseStartFlags(args []string, out *os.File) *startConfig {
 		return nil
 	}
 
+	mode, err := model.ParseOperatingMode(*modeStr)
+	if err != nil {
+		_, _ = fmt.Fprintf(out, "error: %s\n", err)
+
+		return nil
+	}
+
 	if *port < 1 || *port > maxPort {
 		_, _ = fmt.Fprintf(out, "error: invalid port %d (must be 1-65535)\n", *port)
 
@@ -131,12 +146,20 @@ func parseStartFlags(args []string, out *os.File) *startConfig {
 		return nil
 	}
 
+	if *maxResources < 1 {
+		_, _ = fmt.Fprintf(out, "error: --max-resources must be at least 1\n")
+
+		return nil
+	}
+
 	return &startConfig{
-		specPath: fs.Arg(0),
-		port:     *port,
-		strict:   *strict,
-		maxDepth: *maxDepth,
-		level:    level,
+		specPath:     fs.Arg(0),
+		port:         *port,
+		strict:       *strict,
+		maxDepth:     *maxDepth,
+		maxResources: *maxResources,
+		level:        level,
+		mode:         mode,
 	}
 }
 
@@ -162,9 +185,11 @@ func runStart(args []string, out *os.File) int {
 	defer stop()
 
 	handler, result, err := server.Build(ctx, specBytes, server.Config{
-		Strict:   cfg.strict,
-		MaxDepth: cfg.maxDepth,
-		Logger:   logger,
+		Strict:       cfg.strict,
+		MaxDepth:     cfg.maxDepth,
+		MaxResources: cfg.maxResources,
+		Logger:       logger,
+		Mode:         cfg.mode,
 	})
 	if err != nil {
 		_, _ = fmt.Fprintf(out, "error: %s\n", err)
@@ -247,7 +272,7 @@ func printStartupSummary(out *os.File, result *server.StartupResult, port int, s
 	}
 
 	_, _ = fmt.Fprintln(out)
-	_, _ = fmt.Fprintf(out, "Listening on :%d (deterministic mode, strict=%t)\n", port, strict)
+	_, _ = fmt.Fprintf(out, "Listening on :%d (%s mode, strict=%t)\n", port, result.Mode, strict)
 }
 
 // printUsage writes the CLI usage message.
@@ -263,10 +288,12 @@ func printUsage(out *os.File) {
 	_, _ = fmt.Fprintln(out, "  help        Show this help message")
 	_, _ = fmt.Fprintln(out)
 	_, _ = fmt.Fprintln(out, "Flags (for start):")
-	_, _ = fmt.Fprintln(out, "  --port       Server port (default: 8080)")
-	_, _ = fmt.Fprintln(out, "  --strict     Return 500 if response fails schema validation (default: false)")
-	_, _ = fmt.Fprintln(out, "  --max-depth  Max recursion depth for circular schemas (default: 3)")
-	_, _ = fmt.Fprintln(out, "  --log-level  Logging verbosity: debug, info, warn, error (default: info)")
+	_, _ = fmt.Fprintln(out, "  --port           Server port (default: 8080)")
+	_, _ = fmt.Fprintln(out, "  --mode           Operating mode: deterministic, stateful (default: deterministic)")
+	_, _ = fmt.Fprintln(out, "  --strict         Return 500 if response fails schema validation (default: false)")
+	_, _ = fmt.Fprintln(out, "  --max-depth      Max recursion depth for circular schemas (default: 3)")
+	_, _ = fmt.Fprintln(out, "  --max-resources  Max stored resources in stateful mode (default: 10000)")
+	_, _ = fmt.Fprintln(out, "  --log-level      Logging verbosity: debug, info, warn, error (default: info)")
 	_, _ = fmt.Fprintln(out)
 	_, _ = fmt.Fprintln(out, "Aliases:")
 	_, _ = fmt.Fprintln(out, "  mimik        Short alias for mimikos")

@@ -18,6 +18,7 @@ import (
 	merrors "github.com/mimikos-io/mimikos/internal/errors"
 	"github.com/mimikos-io/mimikos/internal/generator"
 	"github.com/mimikos-io/mimikos/internal/model"
+	"github.com/mimikos-io/mimikos/internal/state"
 	"github.com/mimikos-io/mimikos/internal/validator"
 )
 
@@ -35,6 +36,8 @@ type (
 		responder merrors.Responder
 		logger    *slog.Logger
 		strict    bool
+		mode      model.OperatingMode
+		store     state.Store // nil in deterministic mode
 	}
 
 	// discardHandler is a slog.Handler that discards all log output.
@@ -46,6 +49,8 @@ type (
 // validation, responder for error responses, generator for response data.
 // When strict is true, response validation failures return 500 instead of
 // logging a warning and sending the response anyway.
+// In stateful mode, the handler consults the Store for CRUD state management.
+// The store must be nil when mode is deterministic.
 // If logger is nil, a no-op logger is used.
 func NewHandler(
 	behaviorMap *model.BehaviorMap,
@@ -54,13 +59,15 @@ func NewHandler(
 	gen *generator.DataGenerator,
 	strict bool,
 	logger *slog.Logger,
+	mode model.OperatingMode,
+	store state.Store,
 ) *Handler {
 	if logger == nil {
 		logger = slog.New(discardHandler{})
 	}
 
 	mux := http.NewServeMux()
-	h := &Handler{mux: mux, responder: responder, logger: logger, strict: strict}
+	h := &Handler{mux: mux, responder: responder, logger: logger, strict: strict, mode: mode, store: store}
 
 	// Collect entries by path pattern for 405 handling.
 	methodsByPath := make(map[string][]string)
@@ -80,102 +87,131 @@ func NewHandler(
 		})
 	}
 
+	// Default catch-all: any request that doesn't match a registered path
+	// gets an RFC 7807 404. This replaces the two-step Handler()+ServeHTTP()
+	// approach so the mux's ServeHTTP sets path values on the request.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		responder.NotFound(w, r.Method, r.URL.Path)
+	})
+
 	return h
 }
 
-// ServeHTTP implements http.Handler. Unmatched routes produce RFC 7807 404.
-//
-// Invariant: pattern=="" means no path matched. Method-not-allowed cases are
-// handled by the catch-all handlers registered per path pattern in NewHandler,
-// so they never reach this branch.
+// ServeHTTP implements http.Handler. Delegates directly to the internal
+// ServeMux so that Go 1.22+ path values ({petId}, etc.) are populated on
+// the request before handlers run. Unmatched routes fall through to the
+// "/" catch-all which returns RFC 7807 404. Method-not-allowed cases are
+// handled by the method-less catch-all handlers registered per path pattern.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	handler, pattern := h.mux.Handler(r)
-	if pattern == "" {
-		h.responder.NotFound(w, r.Method, r.URL.Path)
-
-		return
-	}
-
-	handler.ServeHTTP(w, r)
+	h.mux.ServeHTTP(w, r)
 }
 
 // operationHandler returns an http.HandlerFunc for a single BehaviorEntry.
-// It executes the per-request runtime pipeline:
-//
-//  1. Read body (with size limit)
-//  2. Content-type check (for methods with body)
-//  3. Request validation
-//  4. Fingerprint
-//  5. Scenario selection
-//  6. Data generation
-//  7. Response writing
+// It validates the request, then delegates to the stateful or deterministic
+// handler based on the operating mode.
 func (h *Handler) operationHandler(
 	entry model.BehaviorEntry,
 	v validator.RequestValidator,
 	gen *generator.DataGenerator,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Read body with size limit.
-		body, err := readBody(r)
-		if err != nil {
-			writeProblem(w, http.StatusRequestEntityTooLarge, "Request body exceeds 10MB limit")
-
-			return
-		}
-
-		if hasBody(r.Method) && len(body) > 0 {
-			ct := r.Header.Get("Content-Type")
-			if !isJSONContentType(ct) {
-				h.responder.UnsupportedMediaType(w, ct)
-
-				return
-			}
-		}
-
-		// Replace body so the validator can read it.
-		r.Body = io.NopCloser(bytes.NewReader(body))
-
-		validationErrs, valErr := v.Validate(r)
-		if valErr != nil {
-			// Defensive: sentinel errors should not fire here since ServeMux
-			// already matched the route, but handle them correctly if they do.
-			if errors.Is(valErr, validator.ErrOperationNotFound) {
-				h.responder.MethodNotAllowed(w, r.Method, r.URL.Path, nil)
-
-				return
-			}
-
-			h.responder.NotFound(w, r.Method, r.URL.Path)
-
-			return
-		}
-
-		if len(validationErrs) > 0 {
-			h.responder.ValidationError(w, validationErrs)
-
+		body, ok := h.validateRequest(w, r, v)
+		if !ok {
 			return
 		}
 
 		requestedStatus := r.Header.Get(statusHeader)
 
-		scenario, err := SelectScenario(&entry, requestedStatus)
-		if err != nil {
-			h.responder.InvalidScenario(w, err.Error())
-
-			return
+		// Stateful mode: when no explicit status is requested, delegate to
+		// state-aware handler. Generic behaviors fall through to deterministic.
+		if h.mode == model.ModeStateful && requestedStatus == "" {
+			if h.handleStatefulMode(w, r, entry, gen, body) {
+				return
+			}
 		}
 
-		if scenario.Schema == nil && scenario.StatusCode != entry.SuccessCode {
-			// Error status with no spec-defined schema — use RFC 7807 fallback.
-			writeErrorFallback(w, scenario)
-
-			return
-		}
-
-		seed := generator.Fingerprint(r.Method, r.URL.Path, r.URL.Query(), body)
-
-		writeResponse(w, gen, scenario, seed, h.strict, h.logger)
+		h.handleDeterministicMode(w, r, entry, gen, requestedStatus, body)
 	}
+}
+
+// handleDeterministicMode generates a response from the schema using a fingerprint
+// seed. The same request always produces the same response.
+func (h *Handler) handleDeterministicMode(
+	w http.ResponseWriter,
+	r *http.Request,
+	entry model.BehaviorEntry,
+	gen *generator.DataGenerator,
+	requestedStatus string,
+	body []byte,
+) {
+	scenario, err := SelectScenario(&entry, requestedStatus)
+	if err != nil {
+		h.responder.InvalidScenario(w, err.Error())
+
+		return
+	}
+
+	if scenario.Schema == nil && scenario.StatusCode != entry.SuccessCode {
+		writeErrorFallback(w, scenario)
+
+		return
+	}
+
+	seed := generator.Fingerprint(r.Method, r.URL.Path, r.URL.Query(), body)
+
+	h.writeResponse(w, gen, scenario, seed)
+}
+
+// validateRequest performs body reading, content-type checking, and request
+// validation. Returns the request body bytes and true on success, or writes
+// an error response and returns false. On success, r.Body is replaced with
+// a buffered reader for downstream consumers.
+func (h *Handler) validateRequest(
+	w http.ResponseWriter,
+	r *http.Request,
+	v validator.RequestValidator,
+) ([]byte, bool) {
+	body, err := readBody(r)
+	if err != nil {
+		writeProblem(w, http.StatusRequestEntityTooLarge, "Request body exceeds 10MB limit")
+
+		return nil, false
+	}
+
+	if hasBody(r.Method) && len(body) > 0 {
+		ct := r.Header.Get("Content-Type")
+		if !isJSONContentType(ct) {
+			h.responder.UnsupportedMediaType(w, ct)
+
+			return nil, false
+		}
+	}
+
+	// Replace body so the validator can read it.
+	r.Body = io.NopCloser(bytes.NewReader(body))
+
+	validationErrs, valErr := v.Validate(r)
+	if valErr != nil {
+		// Defensive: sentinel errors should not fire here since ServeMux
+		// already matched the route, but handle them correctly if they do.
+		if errors.Is(valErr, validator.ErrOperationNotFound) {
+			h.responder.MethodNotAllowed(w, r.Method, r.URL.Path, nil)
+
+			return nil, false
+		}
+
+		h.responder.NotFound(w, r.Method, r.URL.Path)
+
+		return nil, false
+	}
+
+	if len(validationErrs) > 0 {
+		h.responder.ValidationError(w, validationErrs)
+
+		return nil, false
+	}
+
+	return body, true
 }
 
 // writeResponse generates, validates, and writes the response for a matched
@@ -185,13 +221,11 @@ func (h *Handler) operationHandler(
 // Response validation catches generator bugs where the produced data does not
 // conform to the OpenAPI schema. In default mode, a warning is logged and the
 // response is sent anyway. In strict mode, a 500 is returned instead.
-func writeResponse(
+func (h *Handler) writeResponse(
 	w http.ResponseWriter,
 	gen *generator.DataGenerator,
 	scenario *SelectedScenario,
 	seed int64,
-	strict bool,
-	logger *slog.Logger,
 ) {
 	if scenario.StatusCode == http.StatusNoContent {
 		w.WriteHeader(http.StatusNoContent)
@@ -199,7 +233,7 @@ func writeResponse(
 		return
 	}
 
-	responseBody, ok := generateResponseBody(w, gen, scenario, seed, strict, logger)
+	responseBody, ok := h.generateResponseBody(w, gen, scenario, seed)
 	if !ok {
 		return
 	}
@@ -260,13 +294,11 @@ func writeErrorFallback(w http.ResponseWriter, scenario *SelectedScenario) {
 // validates it against the schema. Returns the body and true on success, or
 // writes an error response and returns false if generation fails or strict
 // validation rejects the output.
-func generateResponseBody(
+func (h *Handler) generateResponseBody(
 	w http.ResponseWriter,
 	gen *generator.DataGenerator,
 	scenario *SelectedScenario,
 	seed int64,
-	strict bool,
-	logger *slog.Logger,
 ) (any, bool) {
 	if scenario.Schema == nil || scenario.Schema.Schema == nil {
 		return map[string]any{}, true
@@ -280,14 +312,14 @@ func generateResponseBody(
 	}
 
 	if valErr := scenario.Schema.Validate(responseBody); valErr != nil {
-		if strict {
+		if h.strict {
 			writeProblem(w, http.StatusInternalServerError,
 				"response validation failed: "+valErr.Error())
 
 			return nil, false
 		}
 
-		logger.Warn("generated response does not match schema",
+		h.logger.Warn("generated response does not match schema",
 			"schema", scenario.Schema.Name,
 			"error", valErr.Error(),
 		)

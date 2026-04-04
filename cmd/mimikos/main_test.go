@@ -119,6 +119,89 @@ func TestRun_StartInvalidMaxDepth(t *testing.T) {
 	}
 }
 
+func TestParseStartFlags_ModeDefault(t *testing.T) {
+	specPath := filepath.Join(testdataDir(t), "petstore-3.0.yaml")
+
+	cfg := parseStartFlags([]string{specPath}, os.Stderr)
+
+	require.NotNil(t, cfg)
+	assert.Equal(t, "deterministic", cfg.mode.String())
+}
+
+func TestParseStartFlags_ModeStateful(t *testing.T) {
+	specPath := filepath.Join(testdataDir(t), "petstore-3.0.yaml")
+
+	cfg := parseStartFlags([]string{"--mode", "stateful", specPath}, os.Stderr)
+
+	require.NotNil(t, cfg)
+	assert.Equal(t, "stateful", cfg.mode.String())
+}
+
+func TestParseStartFlags_ModeInvalid(t *testing.T) {
+	specPath := filepath.Join(testdataDir(t), "petstore-3.0.yaml")
+
+	cfg := parseStartFlags([]string{"--mode", "invalid", specPath}, os.Stderr)
+
+	assert.Nil(t, cfg, "invalid mode should reject config")
+}
+
+func TestParseStartFlags_ModeCaseSensitive(t *testing.T) {
+	specPath := filepath.Join(testdataDir(t), "petstore-3.0.yaml")
+
+	tests := []struct {
+		name string
+		mode string
+	}{
+		{"uppercase", "Stateful"},
+		{"all caps", "STATEFUL"},
+		{"mixed", "Deterministic"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := parseStartFlags([]string{"--mode", tt.mode, specPath}, os.Stderr)
+			assert.Nil(t, cfg, "case-variant %q should be rejected", tt.mode)
+		})
+	}
+}
+
+func TestParseStartFlags_MaxResourcesDefault(t *testing.T) {
+	specPath := filepath.Join(testdataDir(t), "petstore-3.0.yaml")
+
+	cfg := parseStartFlags([]string{specPath}, os.Stderr)
+
+	require.NotNil(t, cfg)
+	assert.Equal(t, 10_000, cfg.maxResources)
+}
+
+func TestParseStartFlags_MaxResourcesCustom(t *testing.T) {
+	specPath := filepath.Join(testdataDir(t), "petstore-3.0.yaml")
+
+	cfg := parseStartFlags([]string{"--max-resources", "500", specPath}, os.Stderr)
+
+	require.NotNil(t, cfg)
+	assert.Equal(t, 500, cfg.maxResources)
+}
+
+func TestParseStartFlags_MaxResourcesInvalid(t *testing.T) {
+	specPath := filepath.Join(testdataDir(t), "petstore-3.0.yaml")
+
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{"zero", "0"},
+		{"negative", "-1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := parseStartFlags([]string{"--max-resources", tt.value, specPath}, os.Stderr)
+			assert.Nil(t, cfg)
+		})
+	}
+}
+
 func TestParseLogLevel(t *testing.T) {
 	tests := []struct {
 		input string
