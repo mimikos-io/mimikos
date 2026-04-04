@@ -64,7 +64,7 @@ func TestResponseValidation_ValidResponse(t *testing.T) {
 	bm := behaviorMapWithSchema(sch)
 	resp := merrors.NewResponder()
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
-	h := NewHandler(bm, &stubValidator{}, resp, gen, false, nil)
+	h := NewHandler(bm, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/items/1", nil)
 	rec := httptest.NewRecorder()
@@ -90,7 +90,7 @@ func TestResponseValidation_InvalidDefault_SendsAnyway(t *testing.T) {
 	bm := behaviorMapWithSchema(sch)
 	resp := merrors.NewResponder()
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
-	h := NewHandler(bm, &stubValidator{}, resp, gen, false, nil)
+	h := NewHandler(bm, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/items/1", nil)
 	rec := httptest.NewRecorder()
@@ -119,7 +119,7 @@ func TestResponseValidation_InvalidStrict_Returns500(t *testing.T) {
 	bm := behaviorMapWithSchema(sch)
 	resp := merrors.NewResponder()
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
-	h := NewHandler(bm, &stubValidator{}, resp, gen, true, nil)
+	h := NewHandler(bm, &stubValidator{}, resp, gen, true, nil, model.ModeDeterministic, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/items/1", nil)
 	rec := httptest.NewRecorder()
@@ -148,7 +148,7 @@ func TestResponseValidation_NilSchema_SkipsValidation(t *testing.T) {
 
 	resp := merrors.NewResponder()
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
-	h := NewHandler(bm, &stubValidator{}, resp, gen, true, nil)
+	h := NewHandler(bm, &stubValidator{}, resp, gen, true, nil, model.ModeDeterministic, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/empty", nil)
 	rec := httptest.NewRecorder()
@@ -173,7 +173,7 @@ func TestResponseValidation_204NoContent_SkipsValidation(t *testing.T) {
 
 	resp := merrors.NewResponder()
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
-	h := NewHandler(bm, &stubValidator{}, resp, gen, true, nil)
+	h := NewHandler(bm, &stubValidator{}, resp, gen, true, nil, model.ModeDeterministic, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/items/1", nil)
 	rec := httptest.NewRecorder()

@@ -19,6 +19,7 @@ import (
 	"github.com/mimikos-io/mimikos/internal/model"
 	"github.com/mimikos-io/mimikos/internal/parser"
 	"github.com/mimikos-io/mimikos/internal/router"
+	"github.com/mimikos-io/mimikos/internal/state"
 	"github.com/mimikos-io/mimikos/internal/validator"
 )
 
@@ -36,6 +37,13 @@ type (
 		// Logger is the structured logger for startup diagnostics.
 		// Nil uses a no-op logger.
 		Logger *slog.Logger
+
+		// Mode selects the operating mode. Default (zero value) is deterministic.
+		Mode model.OperatingMode
+
+		// MaxResources is the state store capacity for stateful mode.
+		// Zero uses the default (10,000).
+		MaxResources int
 	}
 
 	// discardHandler is a slog.Handler that discards all log output.
@@ -49,6 +57,7 @@ type StartupResult struct {
 	SpecVersion string
 	Operations  int
 	Entries     []EntryInfo
+	Mode        model.OperatingMode
 }
 
 // EntryInfo holds per-operation info for startup logging.
@@ -101,14 +110,32 @@ func Build(ctx context.Context, specBytes []byte, cfg Config) (http.Handler, *St
 	responder := merrors.NewResponder()
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), cfg.MaxDepth, logger)
 
-	// Wire router.
-	handler := router.NewHandler(bm, v, responder, gen, cfg.Strict, logger)
+	// Resolve operating mode — default to deterministic.
+	mode := cfg.Mode
+	if mode == "" {
+		mode = model.ModeDeterministic
+	}
 
-	return handler, buildStartupResult(spec, bm), nil
+	// Create state store for stateful mode.
+	var store state.Store
+
+	if mode == model.ModeStateful {
+		capacity := cfg.MaxResources
+		if capacity == 0 {
+			capacity = 10_000
+		}
+
+		store = state.NewInMemory(capacity)
+	}
+
+	// Wire router.
+	handler := router.NewHandler(bm, v, responder, gen, cfg.Strict, logger, mode, store)
+
+	return handler, buildStartupResult(spec, bm, mode), nil
 }
 
 // buildStartupResult collects diagnostic info from the startup pipeline.
-func buildStartupResult(spec *parser.ParsedSpec, bm *model.BehaviorMap) *StartupResult {
+func buildStartupResult(spec *parser.ParsedSpec, bm *model.BehaviorMap, mode model.OperatingMode) *StartupResult {
 	entries := make([]EntryInfo, 0, bm.Len())
 
 	for _, e := range bm.Entries() {
@@ -125,6 +152,7 @@ func buildStartupResult(spec *parser.ParsedSpec, bm *model.BehaviorMap) *Startup
 		SpecVersion: spec.Version,
 		Operations:  bm.Len(),
 		Entries:     entries,
+		Mode:        mode,
 	}
 }
 

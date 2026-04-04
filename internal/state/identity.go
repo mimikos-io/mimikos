@@ -32,6 +32,16 @@ func InferResourceIdentity(
 	return resourceType, resourceID
 }
 
+// ResourceType returns the collection name from a URL path pattern.
+// This is the resource type key used for state storage.
+//
+// For "/users/{userId}/orders/{orderId}", it returns "orders".
+// For "/users", it returns "users".
+// Version segments (v1, v2, api) are skipped.
+func ResourceType(pathPattern string) string {
+	return extractResourceType(pathPattern)
+}
+
 // extractResourceType returns the collection name from a path pattern.
 // For "/users/{userId}/orders/{orderId}", it returns "orders".
 // For "/users", it returns "users".
