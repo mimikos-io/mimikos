@@ -171,6 +171,7 @@ func (p *LibopenAPIParser) extractOperations(
 				Path:        path,
 				OperationID: v3Op.OperationId,
 				Summary:     v3Op.Summary,
+				Description: v3Op.Description,
 				Tags:        v3Op.Tags,
 			}
 

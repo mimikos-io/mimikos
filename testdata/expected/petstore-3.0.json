@@ -4,7 +4,17 @@
   "total_operations": 3,
   "classifications": {
     "GET /pets": "list",
-    "POST /pets": "create",
-    "GET /pets/{petId}": "fetch"
+    "GET /pets/{petId}": "fetch",
+    "POST /pets": "create"
+  },
+  "operation_ids": {
+    "GET /pets": "listPets",
+    "GET /pets/{petId}": "showPetById",
+    "POST /pets": "createPets"
+  },
+  "summaries": {
+    "GET /pets": "List all pets",
+    "GET /pets/{petId}": "Info for a specific pet",
+    "POST /pets": "Create a pet"
   }
 }

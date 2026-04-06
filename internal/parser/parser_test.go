@@ -118,6 +118,8 @@ func TestParse_Petstore30(t *testing.T) {
 		assert.Equal(t, "GET", op.Method)
 		assert.Equal(t, "/pets", op.Path)
 		assert.Equal(t, "listPets", op.OperationID)
+		assert.Equal(t, "List all pets", op.Summary)
+		assert.Empty(t, op.Description, "petstore-3.0 has no operation descriptions")
 		assert.Nil(t, op.RequestBody)
 
 		// 200 response with Pets schema (array).
@@ -186,12 +188,14 @@ func TestParse_Petstore30Expanded(t *testing.T) {
 		assert.Equal(t, "GET", op.Method)
 		assert.Equal(t, "/pets", op.Path)
 		assert.Equal(t, "findPets", op.OperationID)
+		assert.Contains(t, op.Description, "Returns all pets from the system")
 	})
 
 	t.Run("addPet", func(t *testing.T) {
 		op := spec.Operations[1]
 		assert.Equal(t, "POST", op.Method)
 		assert.Equal(t, "addPet", op.OperationID)
+		assert.Contains(t, op.Description, "Creates a new pet in the store")
 
 		require.NotNil(t, op.RequestBody)
 		assert.True(t, op.RequestBody.Required)

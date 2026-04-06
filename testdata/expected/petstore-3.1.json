@@ -3,10 +3,24 @@
   "source": "Synthetic (Mimikos spike, tests 3.1 features)",
   "total_operations": 5,
   "classifications": {
-    "GET /pets": "list",
-    "POST /pets": "create",
-    "GET /pets/{petId}": "fetch",
     "DELETE /pets/{petId}": "delete",
-    "PATCH /pets/{petId}": "update"
+    "GET /pets": "list",
+    "GET /pets/{petId}": "fetch",
+    "PATCH /pets/{petId}": "update",
+    "POST /pets": "create"
+  },
+  "operation_ids": {
+    "DELETE /pets/{petId}": "deletePet",
+    "GET /pets": "listPets",
+    "GET /pets/{petId}": "showPetById",
+    "PATCH /pets/{petId}": "updatePet",
+    "POST /pets": "createPet"
+  },
+  "summaries": {
+    "DELETE /pets/{petId}": "Delete a pet",
+    "GET /pets": "List all pets",
+    "GET /pets/{petId}": "Info for a specific pet",
+    "PATCH /pets/{petId}": "Update a pet",
+    "POST /pets": "Create a pet"
   }
 }
