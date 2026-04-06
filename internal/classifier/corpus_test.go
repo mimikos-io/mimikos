@@ -22,7 +22,11 @@ type expectedCorpus struct {
 	Source          string            `json:"source"`
 	TotalOperations int               `json:"total_operations"` //nolint:tagliatelle // matches existing test corpus files
 	Classifications map[string]string `json:"classifications"`
-	Notes           map[string]string `json:"notes,omitempty"`
+	//nolint:tagliatelle // matches corpus file format
+	OperationIDs map[string]string `json:"operation_ids,omitempty"`
+	Summaries    map[string]string `json:"summaries,omitempty"`
+	Descriptions map[string]string `json:"descriptions,omitempty"`
+	Notes        map[string]string `json:"notes,omitempty"`
 }
 
 // testdataDir returns the absolute path to the testdata directory root.

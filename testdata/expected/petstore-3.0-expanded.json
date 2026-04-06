@@ -3,9 +3,21 @@
   "source": "OAI/OpenAPI-Specification (expanded example)",
   "total_operations": 4,
   "classifications": {
+    "DELETE /pets/{id}": "delete",
     "GET /pets": "list",
-    "POST /pets": "create",
     "GET /pets/{id}": "fetch",
-    "DELETE /pets/{id}": "delete"
+    "POST /pets": "create"
+  },
+  "operation_ids": {
+    "DELETE /pets/{id}": "deletePet",
+    "GET /pets": "findPets",
+    "GET /pets/{id}": "find pet by id",
+    "POST /pets": "addPet"
+  },
+  "descriptions": {
+    "DELETE /pets/{id}": "deletes a single pet based on the ID supplied",
+    "GET /pets": "Returns all pets from the system that the user has access to\nNam sed condimentum est.",
+    "GET /pets/{id}": "Returns a user based on a single ID, if the user does not have access to the pet",
+    "POST /pets": "Creates a new pet in the store."
   }
 }

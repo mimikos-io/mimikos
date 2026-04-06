@@ -42,8 +42,12 @@ type (
 		// not all specs define it (auto-generated specs frequently omit it).
 		OperationID string
 
-		// Summary is the operation summary. Used for logging only.
+		// Summary is the operation summary. Used for logging and classification.
 		Summary string
+
+		// Description is the operation description from the spec. May be empty.
+		// Longer-form than Summary — used for classification context.
+		Description string
 
 		// Tags from the operation. May be empty.
 		Tags []string
