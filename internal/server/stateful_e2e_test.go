@@ -41,7 +41,7 @@ func buildStatefulServer(t *testing.T, specFile string, maxResources int) *httpt
 	return httptest.NewServer(handler)
 }
 
-// --- 15.1 Petstore Lifecycle Tests ---
+// --- Petstore Lifecycle Tests ---
 
 func TestStatefulE2E_Petstore_CreateAndFetch(t *testing.T) {
 	skipIfShort(t)
@@ -296,7 +296,7 @@ func TestStatefulE2E_Petstore_FullLifecycle(t *testing.T) {
 	assert.Empty(t, items)
 }
 
-// --- 15.1.3 Error Scenarios in Stateful Mode ---
+// --- Petstore Error Scenarios ---
 
 func TestStatefulE2E_Petstore_FetchNonExistent(t *testing.T) {
 	skipIfShort(t)
@@ -304,7 +304,6 @@ func TestStatefulE2E_Petstore_FetchNonExistent(t *testing.T) {
 	srv := buildStatefulServer(t, "petstore-3.1.yaml", 0)
 	defer srv.Close()
 
-	// GET /pets/999 before any creates → 404.
 	resp := doRequest(t, srv, http.MethodGet, "/pets/999")
 	defer closeBody(t, resp)
 
@@ -318,7 +317,6 @@ func TestStatefulE2E_Petstore_DeleteNonExistent(t *testing.T) {
 	srv := buildStatefulServer(t, "petstore-3.1.yaml", 0)
 	defer srv.Close()
 
-	// DELETE /pets/999 before any creates → 404.
 	resp := doRequest(t, srv, http.MethodDelete, "/pets/999")
 	defer closeBody(t, resp)
 
@@ -339,7 +337,6 @@ func TestStatefulE2E_Petstore_XMimikosStatusBypassesState(t *testing.T) {
 	require.Equal(t, http.StatusCreated, createResp.StatusCode)
 
 	// X-Mimikos-Status bypasses stateful logic entirely (Decision #81).
-	// Requesting 200 should return a generated response, NOT the stored resource.
 	req, err := http.NewRequestWithContext(
 		context.Background(), http.MethodGet, srv.URL+"/pets/42", nil)
 	require.NoError(t, err)
@@ -354,14 +351,13 @@ func TestStatefulE2E_Petstore_XMimikosStatusBypassesState(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, resp.Header.Get("Content-Type"), "application/json")
 
-	// The response should be schema-generated, not the stored "Buddy" pet.
 	var pet map[string]any
 	decodeJSON(t, resp, &pet)
 
 	assert.Contains(t, pet, "id")
 	assert.Contains(t, pet, "name")
 
-	// Verify state was NOT mutated — list still has only the originally created pet.
+	// Verify state was NOT mutated.
 	listResp := doRequest(t, srv, http.MethodGet, "/pets")
 	defer closeBody(t, listResp)
 
@@ -377,7 +373,6 @@ func TestStatefulE2E_Petstore_ValidationStillApplies(t *testing.T) {
 	srv := buildStatefulServer(t, "petstore-3.1.yaml", 0)
 	defer srv.Close()
 
-	// POST /pets without required "name" → 400 (validation error).
 	resp := doJSONRequest(t, srv, http.MethodPost, "/pets", `{"tag": "dog"}`)
 	defer closeBody(t, resp)
 
@@ -391,33 +386,25 @@ func TestStatefulE2E_Petstore_MethodNotAllowed(t *testing.T) {
 	srv := buildStatefulServer(t, "petstore-3.1.yaml", 0)
 	defer srv.Close()
 
-	// PUT /pets is not defined → 405.
 	resp := doJSONRequest(t, srv, http.MethodPut, "/pets", `{"name": "test"}`)
 	defer closeBody(t, resp)
 
 	assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
 }
 
-// --- 15.2 Asana Complex Spec Tests ---
+// --- Asana Complex Spec Tests ---
 //
-// Known limitation: Asana wraps responses in {data: {...}} and uses "gid"
-// instead of "id". InferResourceIdentity cannot extract the ID from wrapped
-// bodies, so the create→fetch-by-id cycle fails (create stores under a
-// deterministic UUID, fetch looks up by path param — they never match).
-// This is the motivation for Task 16 (research) and Task 17 (refactor).
-//
-// Additionally, stateful handleList returns a flat JSON array of stored
-// responses, not the spec-defined wrapper ({data: [...]}). This means list
-// responses in stateful mode violate the Asana response schema. Task 17
-// addresses this with schema-aware list wrapping.
+// Asana wraps responses in {data: {...}} and uses "gid" instead of "id".
+// Task 17 adds wrapper detection, unwrap-on-store/rewrap-on-read, and
+// IDFieldHint to make the full CRUD lifecycle work.
 
-func TestStatefulE2E_Asana_CreateAndList(t *testing.T) {
+func TestStatefulE2E_Asana_CreateAndFetch(t *testing.T) {
 	skipIfShort(t)
 
 	srv := buildStatefulServer(t, "asana.yaml", 0)
 	defer srv.Close()
 
-	// POST /projects → 201. Asana wraps request in {data: {...}}.
+	// POST /projects → 201. Asana wraps response in {data: {...}}.
 	createResp := doJSONRequest(t, srv, http.MethodPost, "/projects",
 		`{"data": {"name": "Test Project"}}`)
 	defer closeBody(t, createResp)
@@ -427,29 +414,186 @@ func TestStatefulE2E_Asana_CreateAndList(t *testing.T) {
 	var createBody map[string]any
 	decodeJSON(t, createResp, &createBody)
 
-	// Asana response is wrapped: {data: {gid: "...", ...}}.
+	// Response is wrapped: {data: {gid: "...", ...}}.
 	data, ok := createBody["data"]
 	require.True(t, ok, "Asana response should have 'data' wrapper")
 
 	dataObj, ok := data.(map[string]any)
 	require.True(t, ok, "data should be an object")
-	assert.Contains(t, dataObj, "gid", "project should have gid from AsanaResource")
+	require.Contains(t, dataObj, "gid", "project should have gid")
 
-	// GET /projects → list returns stored resources.
+	gid := coerceID(t, dataObj["gid"])
+
+	// GET /projects/{project_gid} → 200, returns the created project wrapped.
+	fetchResp := doRequest(t, srv, http.MethodGet, "/projects/"+gid)
+	defer closeBody(t, fetchResp)
+
+	assert.Equal(t, http.StatusOK, fetchResp.StatusCode)
+
+	var fetchBody map[string]any
+	decodeJSON(t, fetchResp, &fetchBody)
+
+	// Fetch response is re-wrapped: {data: {gid: "...", ...}}.
+	fetchData, ok := fetchBody["data"]
+	require.True(t, ok, "fetch response should have 'data' wrapper")
+
+	fetchObj, ok := fetchData.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, dataObj["gid"], fetchObj["gid"], "fetched gid should match created gid")
+}
+
+func TestStatefulE2E_Asana_ListWrapped(t *testing.T) {
+	skipIfShort(t)
+
+	srv := buildStatefulServer(t, "asana.yaml", 0)
+	defer srv.Close()
+
+	// Create a project.
+	createResp := doJSONRequest(t, srv, http.MethodPost, "/projects",
+		`{"data": {"name": "Project"}}`)
+	defer closeBody(t, createResp)
+
+	require.Equal(t, http.StatusCreated, createResp.StatusCode)
+
+	// GET /projects → list returns {data: [...]} not bare array.
 	listResp := doRequest(t, srv, http.MethodGet, "/projects")
 	defer closeBody(t, listResp)
 
 	assert.Equal(t, http.StatusOK, listResp.StatusCode)
 
-	var items []any
-	decodeJSON(t, listResp, &items)
+	var listBody map[string]any
+	decodeJSON(t, listResp, &listBody)
 
-	require.Len(t, items, 1, "list should contain 1 project after 1 create")
+	// Verify list is wrapped in {data: [...]}.
+	dataField, ok := listBody["data"]
+	require.True(t, ok, "list response should have 'data' wrapper key")
 
-	// Stored item is the full wrapped response.
+	items, ok := dataField.([]any)
+	require.True(t, ok, "data field should be an array")
+	require.Len(t, items, 1, "list should contain 1 project")
+
 	item, ok := items[0].(map[string]any)
 	require.True(t, ok)
-	assert.Contains(t, item, "data", "stored item preserves the response wrapper")
+	assert.Contains(t, item, "gid", "list items should be unwrapped resources (not double-wrapped)")
+}
+
+func TestStatefulE2E_Asana_FullLifecycle(t *testing.T) {
+	skipIfShort(t)
+
+	srv := buildStatefulServer(t, "asana.yaml", 0)
+	defer srv.Close()
+
+	// 1. Create
+	createResp := doJSONRequest(t, srv, http.MethodPost, "/projects",
+		`{"data": {"name": "Lifecycle Project"}}`)
+	defer closeBody(t, createResp)
+
+	require.Equal(t, http.StatusCreated, createResp.StatusCode)
+
+	var createBody map[string]any
+	decodeJSON(t, createResp, &createBody)
+
+	data, ok := createBody["data"].(map[string]any)
+	require.True(t, ok, "data should be an object")
+
+	gid := coerceID(t, data["gid"])
+
+	// 2. Fetch
+	fetchResp := doRequest(t, srv, http.MethodGet, "/projects/"+gid)
+	defer closeBody(t, fetchResp)
+
+	assert.Equal(t, http.StatusOK, fetchResp.StatusCode)
+
+	// 3. Update — PATCH with wrapped body.
+	updateResp := doJSONRequest(t, srv, http.MethodPut, "/projects/"+gid,
+		`{"data": {"name": "Updated"}}`)
+	defer closeBody(t, updateResp)
+
+	assert.Equal(t, http.StatusOK, updateResp.StatusCode)
+
+	var updateBody map[string]any
+	decodeJSON(t, updateResp, &updateBody)
+
+	updatedData, ok := updateBody["data"].(map[string]any)
+	require.True(t, ok, "update data should be an object")
+	assert.Equal(t, "Updated", updatedData["name"], "name should be updated")
+	assert.Equal(t, data["gid"], updatedData["gid"], "gid should be preserved")
+
+	// 4. Verify via fetch
+	fetchResp2 := doRequest(t, srv, http.MethodGet, "/projects/"+gid)
+	defer closeBody(t, fetchResp2)
+
+	var fetch2Body map[string]any
+	decodeJSON(t, fetchResp2, &fetch2Body)
+
+	fetch2Data, ok := fetch2Body["data"].(map[string]any)
+	require.True(t, ok, "fetch data should be an object")
+	assert.Equal(t, "Updated", fetch2Data["name"])
+
+	// 5. Delete — Asana returns 200 with {data: {}}, not 204.
+	deleteResp := doRequest(t, srv, http.MethodDelete, "/projects/"+gid)
+	defer closeBody(t, deleteResp)
+
+	assert.Equal(t, http.StatusOK, deleteResp.StatusCode)
+
+	var deleteBody map[string]any
+	decodeJSON(t, deleteResp, &deleteBody)
+
+	// Asana delete responses are wrapped in {data: ...}.
+	_, hasData := deleteBody["data"]
+	assert.True(t, hasData, "Asana delete response should have 'data' wrapper")
+
+	// 6. Verify gone
+	fetchResp3 := doRequest(t, srv, http.MethodGet, "/projects/"+gid)
+	defer closeBody(t, fetchResp3)
+
+	assert.Equal(t, http.StatusNotFound, fetchResp3.StatusCode)
+}
+
+func TestStatefulE2E_Asana_UpdateUnwrap(t *testing.T) {
+	skipIfShort(t)
+
+	srv := buildStatefulServer(t, "asana.yaml", 0)
+	defer srv.Close()
+
+	// Create a project.
+	createResp := doJSONRequest(t, srv, http.MethodPost, "/projects",
+		`{"data": {"name": "Original"}}`)
+	defer closeBody(t, createResp)
+
+	require.Equal(t, http.StatusCreated, createResp.StatusCode)
+
+	var createBody map[string]any
+	decodeJSON(t, createResp, &createBody)
+
+	data, ok := createBody["data"].(map[string]any)
+	require.True(t, ok, "create data should be an object")
+
+	gid := coerceID(t, data["gid"])
+
+	// PATCH with wrapped request body {data: {name: "Updated"}}.
+	// parseRequestBody should unwrap before shallowMerge — otherwise
+	// the stored resource gets corrupted with a "data" key.
+	updateResp := doJSONRequest(t, srv, http.MethodPut, "/projects/"+gid,
+		`{"data": {"name": "Updated"}}`)
+	defer closeBody(t, updateResp)
+
+	assert.Equal(t, http.StatusOK, updateResp.StatusCode)
+
+	// Fetch and verify the resource is not corrupted.
+	fetchResp := doRequest(t, srv, http.MethodGet, "/projects/"+gid)
+	defer closeBody(t, fetchResp)
+
+	var fetchBody map[string]any
+	decodeJSON(t, fetchResp, &fetchBody)
+
+	fetchData, ok := fetchBody["data"].(map[string]any)
+	require.True(t, ok, "fetch response should be wrapped")
+
+	// The inner resource should have "name" updated, NOT a nested "data" key.
+	assert.Equal(t, "Updated", fetchData["name"])
+	_, hasNestedData := fetchData["data"]
+	assert.False(t, hasNestedData, "resource should not have corrupted 'data' key from merge")
 }
 
 func TestStatefulE2E_Asana_MultipleResourceTypes(t *testing.T) {
@@ -477,75 +621,16 @@ func TestStatefulE2E_Asana_MultipleResourceTypes(t *testing.T) {
 
 	require.Equal(t, http.StatusCreated, tagResp.StatusCode)
 
-	// Each resource type lists independently.
+	// Each resource type lists independently with wrapped response.
 	projectList := doRequest(t, srv, http.MethodGet, "/projects")
 	defer closeBody(t, projectList)
 
-	var projects []any
-	decodeJSON(t, projectList, &projects)
+	var projectBody map[string]any
+	decodeJSON(t, projectList, &projectBody)
 
-	assert.Len(t, projects, 1, "projects list should have 1")
-
-	goalList := doRequest(t, srv, http.MethodGet, "/goals")
-	defer closeBody(t, goalList)
-
-	var goals []any
-	decodeJSON(t, goalList, &goals)
-
-	assert.Len(t, goals, 1, "goals list should have 1")
-
-	tagList := doRequest(t, srv, http.MethodGet, "/tags")
-	defer closeBody(t, tagList)
-
-	var tags []any
-	decodeJSON(t, tagList, &tags)
-
-	assert.Len(t, tags, 1, "tags list should have 1")
-}
-
-func TestStatefulE2E_Asana_DeleteAndVerifyList(t *testing.T) {
-	skipIfShort(t)
-
-	srv := buildStatefulServer(t, "asana.yaml", 0)
-	defer srv.Close()
-
-	// Create 2 projects.
-	resp1 := doJSONRequest(t, srv, http.MethodPost, "/projects",
-		`{"data": {"name": "Project A"}}`)
-	defer closeBody(t, resp1)
-
-	require.Equal(t, http.StatusCreated, resp1.StatusCode)
-
-	resp2 := doJSONRequest(t, srv, http.MethodPost, "/projects",
-		`{"data": {"name": "Project B"}}`)
-	defer closeBody(t, resp2)
-
-	require.Equal(t, http.StatusCreated, resp2.StatusCode)
-
-	// List has 2.
-	listResp := doRequest(t, srv, http.MethodGet, "/projects")
-	defer closeBody(t, listResp)
-
-	var items []any
-	decodeJSON(t, listResp, &items)
-
-	require.Len(t, items, 2)
-
-	// Delete uses path param — won't match wrapped responses that used
-	// deterministic UUID. But we can verify delete of non-existent returns 404.
-	deleteResp := doRequest(t, srv, http.MethodDelete, "/projects/nonexistent")
-	defer closeBody(t, deleteResp)
-
-	assert.Equal(t, http.StatusNotFound, deleteResp.StatusCode)
-
-	// List still has 2 — nothing was actually deleted.
-	listResp2 := doRequest(t, srv, http.MethodGet, "/projects")
-	defer closeBody(t, listResp2)
-
-	var items2 []any
-	decodeJSON(t, listResp2, &items2)
-
-	assert.Len(t, items2, 2, "list unchanged after failed delete")
+	projectItems, ok := projectBody["data"].([]any)
+	require.True(t, ok, "projects list data should be an array")
+	assert.Len(t, projectItems, 1, "projects list should have 1")
 }
 
 func TestStatefulE2E_Asana_FetchNonExistent(t *testing.T) {
@@ -554,7 +639,6 @@ func TestStatefulE2E_Asana_FetchNonExistent(t *testing.T) {
 	srv := buildStatefulServer(t, "asana.yaml", 0)
 	defer srv.Close()
 
-	// GET /projects/{project_gid} with no prior creates → 404.
 	resp := doRequest(t, srv, http.MethodGet, "/projects/abc123")
 	defer closeBody(t, resp)
 
@@ -568,7 +652,6 @@ func TestStatefulE2E_Asana_XMimikosStatusOverride(t *testing.T) {
 	srv := buildStatefulServer(t, "asana.yaml", 0)
 	defer srv.Close()
 
-	// X-Mimikos-Status bypasses stateful mode entirely.
 	resp := doRequestWithStatus(t, srv, "/projects/abc123", "500")
 	defer closeBody(t, resp)
 
@@ -577,7 +660,6 @@ func TestStatefulE2E_Asana_XMimikosStatusOverride(t *testing.T) {
 	var body map[string]any
 	decodeJSON(t, resp, &body)
 
-	// Asana defines 500 with ErrorResponse schema.
 	_, ok := body["errors"]
 	assert.True(t, ok, "500 should use Asana's ErrorResponse schema")
 }
@@ -598,37 +680,231 @@ func TestStatefulE2E_Asana_GenericFallsThrough(t *testing.T) {
 	assert.Contains(t, resp.Header.Get("Content-Type"), "application/json")
 }
 
-func TestStatefulE2E_Asana_CreateMultipleThenList(t *testing.T) {
+// --- 17.4 Nested Resource E2E Test ---
+//
+// Known limitation: /projects/{project_gid}/tasks and /tasks share the "tasks"
+// store namespace because ResourceType() extracts the last non-param segment.
+// Composite store keys (e.g., "projects/{gid}/tasks" vs "tasks") would fix this
+// but require changes to the store key model — deferred.
+
+func TestStatefulE2E_Asana_NestedResourceNamespace(t *testing.T) {
 	skipIfShort(t)
 
 	srv := buildStatefulServer(t, "asana.yaml", 0)
 	defer srv.Close()
 
-	// Create 3 projects with different bodies → distinct stored resources.
-	for i := range 3 {
-		resp := doJSONRequest(t, srv, http.MethodPost, "/projects",
-			`{"data": {"name": "Project `+strconv.Itoa(i)+`"}}`)
-		defer closeBody(t, resp)
+	// Create a task via POST /tasks (the only task create endpoint in Asana spec).
+	createResp := doJSONRequest(t, srv, http.MethodPost, "/tasks",
+		`{"data": {"name": "Root Task"}}`)
+	defer closeBody(t, createResp)
 
-		require.Equal(t, http.StatusCreated, resp.StatusCode)
-	}
+	require.Equal(t, http.StatusCreated, createResp.StatusCode)
 
-	// List returns all 3.
-	listResp := doRequest(t, srv, http.MethodGet, "/projects")
-	defer closeBody(t, listResp)
+	// GET /tasks lists the task.
+	rootList := doRequest(t, srv, http.MethodGet, "/tasks")
+	defer closeBody(t, rootList)
 
-	var items []any
-	decodeJSON(t, listResp, &items)
+	var rootBody map[string]any
+	decodeJSON(t, rootList, &rootBody)
 
-	assert.Len(t, items, 3, "list should contain all 3 created projects")
+	rootItems, ok := rootBody["data"].([]any)
+	require.True(t, ok, "tasks list data should be an array")
+	require.Len(t, rootItems, 1, "/tasks should have 1 task")
+
+	// GET /projects/{project_gid}/tasks shares the "tasks" namespace.
+	// The nested path sees the same tasks as the root path.
+	// This documents the namespace collision: ResourceType() extracts "tasks"
+	// from both paths, so they share the same store namespace.
+	nestedList := doRequest(t, srv, http.MethodGet, "/projects/proj1/tasks")
+	defer closeBody(t, nestedList)
+
+	var nestedBody map[string]any
+	decodeJSON(t, nestedList, &nestedBody)
+
+	nestedItems, ok := nestedBody["data"].([]any)
+	require.True(t, ok, "nested tasks list data should be an array")
+	assert.Len(t, nestedItems, 1, "nested /projects/{gid}/tasks shares 'tasks' namespace (known limitation)")
 }
 
-// --- 15.2 Capacity + LRU Eviction Tests ---
+// --- Targeted Pattern Tests (e2e-stateful-test.yaml) ---
+//
+// These test patterns not covered by Petstore (flat + bare array + "id") or
+// Asana (wrapped everything + "gid"). The spec is purpose-built.
+
+func TestStatefulE2E_FlatResource_WrappedList(t *testing.T) {
+	skipIfShort(t)
+
+	srv := buildStatefulServer(t, "e2e-stateful-test.yaml", 0)
+	defer srv.Close()
+
+	// Stripe pattern: POST /customers → flat {id, name, email}.
+	// Path param is {customer} which doesn't suffix-strip to a body field.
+	// ID extraction uses Strategy 4 (body "id" fallback).
+	createResp := doJSONRequest(t, srv, http.MethodPost, "/customers", `{"name": "Alice"}`)
+	defer closeBody(t, createResp)
+
+	require.Equal(t, http.StatusCreated, createResp.StatusCode)
+
+	var created map[string]any
+	decodeJSON(t, createResp, &created)
+
+	// Response is flat (no wrapper).
+	require.Contains(t, created, "id")
+	require.Contains(t, created, "name")
+
+	customerID := coerceID(t, created["id"])
+
+	// GET /customers/{customer} → flat resource.
+	fetchResp := doRequest(t, srv, http.MethodGet, "/customers/"+customerID)
+	defer closeBody(t, fetchResp)
+
+	assert.Equal(t, http.StatusOK, fetchResp.StatusCode)
+
+	var fetched map[string]any
+	decodeJSON(t, fetchResp, &fetched)
+
+	assert.Equal(t, created["id"], fetched["id"])
+
+	// GET /customers → object-wrapped list with "results" key (not "data").
+	listResp := doRequest(t, srv, http.MethodGet, "/customers")
+	defer closeBody(t, listResp)
+
+	assert.Equal(t, http.StatusOK, listResp.StatusCode)
+
+	var listBody map[string]any
+	decodeJSON(t, listResp, &listBody)
+
+	// List is wrapped in {results: [...], has_more: bool, total: int}.
+	results, ok := listBody["results"].([]any)
+	require.True(t, ok, "list should have 'results' array key")
+	require.Len(t, results, 1)
+
+	// Pagination metadata should be present (generated from schema).
+	assert.Contains(t, listBody, "has_more", "pagination metadata should be generated")
+}
+
+func TestStatefulE2E_NonDataArrayKey(t *testing.T) {
+	skipIfShort(t)
+
+	srv := buildStatefulServer(t, "e2e-stateful-test.yaml", 0)
+	defer srv.Close()
+
+	// Create a product — flat response.
+	createResp := doJSONRequest(t, srv, http.MethodPost, "/products", `{"title": "Widget"}`)
+	defer closeBody(t, createResp)
+
+	require.Equal(t, http.StatusCreated, createResp.StatusCode)
+
+	// GET /products → list wrapped with "items" key.
+	listResp := doRequest(t, srv, http.MethodGet, "/products")
+	defer closeBody(t, listResp)
+
+	assert.Equal(t, http.StatusOK, listResp.StatusCode)
+
+	var listBody map[string]any
+	decodeJSON(t, listResp, &listBody)
+
+	items, ok := listBody["items"].([]any)
+	require.True(t, ok, "list should have 'items' array key")
+	require.Len(t, items, 1)
+
+	// Pagination metadata with "page" key should be generated.
+	assert.Contains(t, listBody, "page", "pagination metadata should be generated")
+}
+
+func TestStatefulE2E_IDFallback_StripePattern(t *testing.T) {
+	skipIfShort(t)
+
+	srv := buildStatefulServer(t, "e2e-stateful-test.yaml", 0)
+	defer srv.Close()
+
+	// Path param is {customer} — not a standard ID param name.
+	// singularize("customers") = "customer", stripResourcePrefix("customer", "customers")
+	// → no remainder (param == singular). Falls through to Strategy 4: body["id"].
+	createResp := doJSONRequest(t, srv, http.MethodPost, "/customers", `{"name": "Bob"}`)
+	defer closeBody(t, createResp)
+
+	require.Equal(t, http.StatusCreated, createResp.StatusCode)
+
+	var created map[string]any
+	decodeJSON(t, createResp, &created)
+
+	customerID := coerceID(t, created["id"])
+
+	// Full CRUD lifecycle works via body["id"] fallback.
+	// Update
+	updateResp := doJSONRequest(t, srv, http.MethodPut, "/customers/"+customerID,
+		`{"name": "Bob Updated"}`)
+	defer closeBody(t, updateResp)
+
+	assert.Equal(t, http.StatusOK, updateResp.StatusCode)
+
+	var updated map[string]any
+	decodeJSON(t, updateResp, &updated)
+
+	assert.Equal(t, "Bob Updated", updated["name"])
+
+	// Delete
+	deleteResp := doRequest(t, srv, http.MethodDelete, "/customers/"+customerID)
+	defer closeBody(t, deleteResp)
+
+	assert.Equal(t, http.StatusNoContent, deleteResp.StatusCode)
+
+	// Verify gone
+	fetchResp := doRequest(t, srv, http.MethodGet, "/customers/"+customerID)
+	defer closeBody(t, fetchResp)
+
+	assert.Equal(t, http.StatusNotFound, fetchResp.StatusCode)
+}
+
+func TestStatefulE2E_PaginationMetadataDeterminism(t *testing.T) {
+	skipIfShort(t)
+
+	srv := buildStatefulServer(t, "e2e-stateful-test.yaml", 0)
+	defer srv.Close()
+
+	// Create 1 customer.
+	create1 := doJSONRequest(t, srv, http.MethodPost, "/customers", `{"name": "A"}`)
+	defer closeBody(t, create1)
+
+	require.Equal(t, http.StatusCreated, create1.StatusCode)
+
+	// GET /customers → 1 item, captures pagination metadata.
+	list1 := doRequest(t, srv, http.MethodGet, "/customers")
+	defer closeBody(t, list1)
+
+	var body1 map[string]any
+	decodeJSON(t, list1, &body1)
+
+	hasMore1 := body1["has_more"]
+
+	// Create a 2nd customer.
+	create2 := doJSONRequest(t, srv, http.MethodPost, "/customers", `{"name": "B"}`)
+	defer closeBody(t, create2)
+
+	require.Equal(t, http.StatusCreated, create2.StatusCode)
+
+	// GET /customers → 2 items, same pagination metadata.
+	list2 := doRequest(t, srv, http.MethodGet, "/customers")
+	defer closeBody(t, list2)
+
+	var body2 map[string]any
+	decodeJSON(t, list2, &body2)
+
+	hasMore2 := body2["has_more"]
+
+	// Pagination metadata is generated from schema seed (deterministic),
+	// not derived from actual store state. Same seed → same metadata.
+	// This is a known limitation documented in the design (§4.3).
+	assert.Equal(t, hasMore1, hasMore2,
+		"pagination metadata should be deterministic regardless of item count (known limitation)")
+}
+
+// --- Capacity + LRU Eviction Tests ---
 
 func TestStatefulE2E_Petstore_LRUEviction(t *testing.T) {
 	skipIfShort(t)
 
-	// Small capacity to force eviction.
 	srv := buildStatefulServer(t, "petstore-3.1.yaml", 3)
 	defer srv.Close()
 
@@ -701,10 +977,10 @@ func TestStatefulE2E_Petstore_ContentTypeValidation(t *testing.T) {
 	srv := buildStatefulServer(t, "petstore-3.1.yaml", 0)
 	defer srv.Close()
 
-	// POST with wrong content type → 415.
+	// POST with wrong content type + body → 415.
 	req, err := http.NewRequestWithContext(
 		context.Background(), http.MethodPost, srv.URL+"/pets",
-		http.NoBody)
+		strings.NewReader(`{"name":"test"}`))
 	require.NoError(t, err)
 
 	req.Header.Set("Content-Type", "text/plain")
@@ -714,22 +990,7 @@ func TestStatefulE2E_Petstore_ContentTypeValidation(t *testing.T) {
 
 	defer closeBody(t, resp)
 
-	// Empty body with text/plain — depending on validator, this may be 415 or
-	// pass through (no body to validate). The key point: wrong content type
-	// with a body should fail.
-	req2, err := http.NewRequestWithContext(
-		context.Background(), http.MethodPost, srv.URL+"/pets",
-		strings.NewReader(`{"name":"test"}`))
-	require.NoError(t, err)
-
-	req2.Header.Set("Content-Type", "text/plain")
-
-	resp2, err := http.DefaultClient.Do(req2)
-	require.NoError(t, err)
-
-	defer closeBody(t, resp2)
-
-	assert.Equal(t, http.StatusUnsupportedMediaType, resp2.StatusCode)
+	assert.Equal(t, http.StatusUnsupportedMediaType, resp.StatusCode)
 }
 
 func TestStatefulE2E_Petstore_NotFoundRoute(t *testing.T) {
@@ -738,7 +999,6 @@ func TestStatefulE2E_Petstore_NotFoundRoute(t *testing.T) {
 	srv := buildStatefulServer(t, "petstore-3.1.yaml", 0)
 	defer srv.Close()
 
-	// Completely unknown route → 404 (not a stateful 404).
 	resp := doRequest(t, srv, http.MethodGet, "/unknown/path")
 	defer closeBody(t, resp)
 

@@ -1,0 +1,209 @@
+openapi: "3.0.3"
+info:
+  title: E2E Stateful Test API
+  version: "1.0.0"
+  description: >
+    Purpose-built spec for stateful mode patterns not covered by Petstore or Asana.
+    Tests: flat single-resource + object-wrapped list (Stripe pattern),
+    non-"data" array key, ID fallback via body "id", pagination metadata.
+paths:
+  # --- Pattern 1: Flat single-resource + object-wrapped list ---
+  # Stripe pattern: GET /customers/{customer} returns flat {id, name, email}
+  # but GET /customers returns {results: [...], has_more: bool, total: int}.
+  /customers:
+    get:
+      operationId: listCustomers
+      responses:
+        "200":
+          description: Paginated list of customers
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerList"
+    post:
+      operationId: createCustomer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewCustomer"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+  /customers/{customer}:
+    get:
+      operationId: getCustomer
+      parameters:
+        - name: customer
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Customer details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+    put:
+      operationId: updateCustomer
+      parameters:
+        - name: customer
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewCustomer"
+      responses:
+        "200":
+          description: Updated customer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+    delete:
+      operationId: deleteCustomer
+      parameters:
+        - name: customer
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+
+  # --- Pattern 2: Object-wrapped list with "items" key ---
+  /products:
+    get:
+      operationId: listProducts
+      responses:
+        "200":
+          description: Paginated list of products
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductList"
+    post:
+      operationId: createProduct
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewProduct"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+  /products/{productId}:
+    get:
+      operationId: getProduct
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Product details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+
+components:
+  schemas:
+    Customer:
+      type: object
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+
+    NewCustomer:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+        email:
+          type: string
+
+    CustomerList:
+      type: object
+      required:
+        - results
+        - has_more
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/Customer"
+        has_more:
+          type: boolean
+        total:
+          type: integer
+
+    Product:
+      type: object
+      required:
+        - id
+        - title
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        price:
+          type: number
+
+    NewProduct:
+      type: object
+      required:
+        - title
+      properties:
+        title:
+          type: string
+          minLength: 1
+        price:
+          type: number
+
+    ProductList:
+      type: object
+      required:
+        - items
+        - page
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Product"
+        page:
+          type: integer
+        total_pages:
+          type: integer
