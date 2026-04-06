@@ -40,6 +40,25 @@ type (
 
 		// Confidence is the classifier's confidence in the behavior type (0.0–1.0).
 		Confidence float64
+
+		// WrapperKey is the single-property wrapper key for this operation's
+		// success response schema. Empty string means flat (no wrapper).
+		// Detected at startup for create/fetch/update behaviors.
+		// Example: "data" for Asana's {data: {resource}} pattern.
+		WrapperKey string
+
+		// ListArrayKey is the property name containing the array of resources
+		// in a list response schema. Empty string means bare array (top-level
+		// type: array). Detected at startup for list behaviors.
+		// Example: "data" for Asana, "items" for Spotify, "results" for Notion.
+		ListArrayKey string
+
+		// IDFieldHint is the body field name expected to hold the resource ID.
+		// Computed at startup by correlating the fetch variant's path parameter
+		// with suffix-stripping. Empty means no hint — fall through to "id"
+		// convention.
+		// Example: "gid" for Asana (from fetch path /projects/{project_gid}).
+		IDFieldHint string
 	}
 )
 

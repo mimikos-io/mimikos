@@ -2,6 +2,7 @@ package router
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -26,7 +27,7 @@ func newStatefulTestHandler(store state.Store) *Handler {
 	return &Handler{
 		store:  store,
 		strict: false,
-		logger: nil,
+		logger: slog.New(discardHandler{}),
 	}
 }
 
@@ -113,8 +114,6 @@ func genericEntry() model.BehaviorEntry {
 }
 
 // storeResource creates a resource directly in the store.
-//
-//nolint:unparam // test helper — resType varies as more test cases are added
 func storeResource(t *testing.T, s state.Store, resType, id string, data map[string]any) {
 	t.Helper()
 	require.NoError(t, s.Put(resType, id, data))
@@ -129,8 +128,6 @@ type statefulMuxResult struct {
 // serveStatefulViaMux dispatches a request through a real ServeMux so that
 // path parameters (r.PathValue) are populated, then delegates to handleStatefulMode.
 // This is needed because handleStatefulMode relies on Go 1.22+ path value extraction.
-//
-//nolint:unparam // test helper — muxPattern varies across behavior types
 func serveStatefulViaMux(
 	t *testing.T,
 	method, muxPattern, requestURL string,
@@ -263,6 +260,35 @@ func TestStateful_ListEmpty(t *testing.T) {
 	assert.Empty(t, body)
 }
 
+func TestStateful_ListEmpty_WrappedEnvelope(t *testing.T) {
+	// Object-wrapped list with empty store should return {listArrayKey: [], ...metadata...},
+	// not an empty object.
+	store := state.NewInMemory(100)
+	h := newStatefulTestHandler(store)
+
+	entry := listEntry()
+	entry.ListArrayKey = "data"
+
+	req := httptest.NewRequest(http.MethodGet, "/pets", nil)
+	rec := httptest.NewRecorder()
+
+	handled := h.handleStatefulMode(rec, req, entry, newStatefulGen(), nil)
+
+	require.True(t, handled)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+
+	// The array slot should be present and empty.
+	dataField, ok := body["data"]
+	require.True(t, ok, "wrapped list should have array key even when empty")
+
+	items, ok := dataField.([]any)
+	require.True(t, ok, "array key should be an array")
+	assert.Empty(t, items, "array should be empty when no resources stored")
+}
+
 func TestStateful_UpdateMergesFields(t *testing.T) {
 	store := state.NewInMemory(100)
 	storeResource(t, store, "pets", "42", map[string]any{
@@ -315,6 +341,38 @@ func TestStateful_DeleteRemoves(t *testing.T) {
 
 	// Verify removal.
 	_, found := store.Get("pets", "42")
+	assert.False(t, found, "resource should be deleted from store")
+}
+
+func TestStateful_DeleteNon204SuccessCode(t *testing.T) {
+	// Asana pattern: DELETE returns 200 with response body, not 204.
+	store := state.NewInMemory(100)
+	storeResource(t, store, "projects", "abc", map[string]any{"gid": "abc", "name": "Project"})
+
+	entry := model.BehaviorEntry{
+		Method:      http.MethodDelete,
+		PathPattern: "/projects/{project_gid}",
+		Type:        model.BehaviorDelete,
+		SuccessCode: http.StatusOK,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusOK: {Name: "EmptyResponse", Schema: petObjectSchema()},
+		},
+		Source:     model.SourceHeuristic,
+		Confidence: 0.9,
+	}
+
+	result := serveStatefulViaMux(t, http.MethodDelete, "/projects/{project_gid}", "/projects/abc",
+		"", entry, store)
+
+	assert.Equal(t, http.StatusOK, result.recorder.Code)
+
+	// Should have a JSON response body (not empty like 204).
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(result.recorder.Body.Bytes(), &body))
+	assert.NotEmpty(t, body, "non-204 delete should have response body")
+
+	// Verify removal.
+	_, found := store.Get("projects", "abc")
 	assert.False(t, found, "resource should be deleted from store")
 }
 
@@ -402,6 +460,174 @@ func TestStateful_PatchMergesFields(t *testing.T) {
 	assert.Equal(t, "Alice", body["owner"])
 	// Server-generated id preserved.
 	assert.InDelta(t, float64(42), body["id"], 0)
+}
+
+// --- unwrapResource tests ---
+
+func TestUnwrapResource_EmptyKey(t *testing.T) {
+	body := map[string]any{"id": float64(1)}
+	result := unwrapResource(body, "")
+	assert.Equal(t, body, result)
+}
+
+func TestUnwrapResource_WithKey(t *testing.T) {
+	inner := map[string]any{"gid": "abc"}
+	body := map[string]any{"data": inner}
+	result := unwrapResource(body, "data")
+
+	resultMap, ok := result.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "abc", resultMap["gid"])
+}
+
+func TestUnwrapResource_MissingKey(t *testing.T) {
+	body := map[string]any{"other": map[string]any{}}
+	result := unwrapResource(body, "data")
+	// Pass-through when key not found.
+	assert.Equal(t, body, result)
+}
+
+func TestUnwrapResource_NonMap(t *testing.T) {
+	result := unwrapResource("string body", "data")
+	assert.Equal(t, "string body", result)
+}
+
+// --- wrapResource tests ---
+
+func TestWrapResource_EmptyKey(t *testing.T) {
+	resource := map[string]any{"id": float64(1)}
+	result := wrapResource(resource, "")
+	assert.Equal(t, resource, result)
+}
+
+func TestWrapResource_WithKey(t *testing.T) {
+	resource := map[string]any{"gid": "abc"}
+	result := wrapResource(resource, "data")
+
+	resultMap, ok := result.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, resource, resultMap["data"])
+}
+
+// --- parseRequestBody tests ---
+
+func TestParseRequestBody_EmptyBody(t *testing.T) {
+	result, err := parseRequestBody([]byte{}, "")
+	require.NoError(t, err)
+	assert.Empty(t, result)
+	assert.NotNil(t, result) // empty map, not nil
+}
+
+func TestParseRequestBody_ValidJSON_NoWrapper(t *testing.T) {
+	result, err := parseRequestBody([]byte(`{"name":"X"}`), "")
+	require.NoError(t, err)
+	assert.Equal(t, "X", result["name"])
+}
+
+func TestParseRequestBody_ValidJSON_WithWrapper(t *testing.T) {
+	result, err := parseRequestBody([]byte(`{"data":{"name":"X"}}`), "data")
+	require.NoError(t, err)
+	assert.Equal(t, "X", result["name"])
+}
+
+func TestParseRequestBody_MalformedJSON(t *testing.T) {
+	_, err := parseRequestBody([]byte(`not json`), "")
+	assert.Error(t, err)
+}
+
+func TestParseRequestBody_WrapperValueNotObject(t *testing.T) {
+	// When wrapper key points to a non-object value, pass through full body.
+	result, err := parseRequestBody([]byte(`{"data": "not an object"}`), "data")
+	require.NoError(t, err)
+	assert.Equal(t, "not an object", result["data"])
+}
+
+func TestParseRequestBody_WrapperKeyMissing(t *testing.T) {
+	// Client sent unwrapped body for a wrapped spec — pass through.
+	result, err := parseRequestBody([]byte(`{"name":"X"}`), "data")
+	require.NoError(t, err)
+	assert.Equal(t, "X", result["name"])
+}
+
+// --- shallowMerge tests (new signature) ---
+
+func TestShallowMerge_Basic(t *testing.T) {
+	stored := map[string]any{"a": float64(1), "b": float64(2)}
+	patch := map[string]any{"b": float64(3), "c": float64(4)}
+
+	result := shallowMerge(stored, patch)
+	assert.InDelta(t, float64(1), result["a"], 0)
+	assert.InDelta(t, float64(3), result["b"], 0)
+	assert.InDelta(t, float64(4), result["c"], 0)
+}
+
+func TestShallowMerge_EmptyPatch(t *testing.T) {
+	stored := map[string]any{"a": float64(1)}
+	result := shallowMerge(stored, map[string]any{})
+	assert.InDelta(t, float64(1), result["a"], 0)
+}
+
+func TestShallowMerge_NonMapStored(t *testing.T) {
+	result := shallowMerge("string", map[string]any{"a": float64(1)})
+	assert.InDelta(t, float64(1), result["a"], 0)
+}
+
+func TestShallowMerge_CloneSafety(t *testing.T) {
+	stored := map[string]any{"a": float64(1)}
+	patch := map[string]any{"b": float64(2)}
+
+	result := shallowMerge(stored, patch)
+
+	// result should have both keys.
+	assert.InDelta(t, float64(1), result["a"], 0)
+	assert.InDelta(t, float64(2), result["b"], 0)
+
+	// Original stored map must NOT be mutated.
+	_, hasBKey := stored["b"]
+	assert.False(t, hasBKey, "stored map should not be mutated by shallowMerge")
+}
+
+// --- shallowMerge concurrent safety ---
+
+func TestShallowMerge_ConcurrentSafety(t *testing.T) {
+	store := state.NewInMemory(100)
+	require.NoError(t, store.Put("pets", "1", map[string]any{
+		"id": float64(1), "name": "Fido", "count": float64(0),
+	}))
+
+	// 10 goroutines each updating the same resource.
+	const goroutines = 10
+
+	done := make(chan struct{}, goroutines)
+
+	for i := range goroutines {
+		go func(n int) {
+			defer func() { done <- struct{}{} }()
+
+			stored, found := store.Get("pets", "1")
+			if !found {
+				return
+			}
+
+			patch := map[string]any{"count": float64(n)}
+			merged := shallowMerge(stored, patch)
+			_ = store.Put("pets", "1", merged)
+		}(i)
+	}
+
+	for range goroutines {
+		<-done
+	}
+
+	// Final state should be consistent (some goroutine's value wins).
+	result, found := store.Get("pets", "1")
+	require.True(t, found)
+
+	resultMap, ok := result.(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, resultMap, "id")
+	assert.Contains(t, resultMap, "name")
+	assert.Contains(t, resultMap, "count")
 }
 
 // --- extractPathParams tests ---

@@ -50,6 +50,11 @@ type (
 	discardHandler struct{}
 )
 
+func (discardHandler) Enabled(context.Context, slog.Level) bool  { return false }
+func (discardHandler) Handle(context.Context, slog.Record) error { return nil }
+func (d discardHandler) WithAttrs([]slog.Attr) slog.Handler      { return d }
+func (d discardHandler) WithGroup(string) slog.Handler           { return d }
+
 // StartupResult carries diagnostic info produced during server assembly
 // for CLI startup logging.
 type StartupResult struct {
@@ -99,6 +104,12 @@ func Build(ctx context.Context, specBytes []byte, cfg Config) (http.Handler, *St
 	bm, err := builder.BuildBehaviorMap(spec, classify, sc, logger)
 	if err != nil {
 		return nil, nil, fmt.Errorf("build behavior map: %w", err)
+	}
+
+	// Annotate stateful metadata (wrapper keys, list array keys, ID field hints)
+	// before validators and router consume the behavior map.
+	if cfg.Mode == model.ModeStateful {
+		annotateStatefulMetadata(bm, logger)
 	}
 
 	v, err := validator.NewLibopenAPIValidator(doc)
@@ -155,8 +166,3 @@ func buildStartupResult(spec *parser.ParsedSpec, bm *model.BehaviorMap, mode mod
 		Mode:        mode,
 	}
 }
-
-func (discardHandler) Enabled(context.Context, slog.Level) bool  { return false }
-func (discardHandler) Handle(context.Context, slog.Record) error { return nil }
-func (d discardHandler) WithAttrs([]slog.Attr) slog.Handler      { return d }
-func (d discardHandler) WithGroup(string) slog.Handler           { return d }

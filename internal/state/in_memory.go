@@ -2,6 +2,7 @@ package state
 
 import (
 	"container/list"
+	"sort"
 	"sync"
 )
 
@@ -121,17 +122,31 @@ func (m *InMemory) Delete(resourceType, id string) bool {
 	return true
 }
 
-// List returns all stored resources of the given type. Returns an empty
-// slice (not nil) if no resources of that type exist.
+// List returns all stored resources of the given type, sorted by resource ID
+// for deterministic ordering. Returns an empty slice (not nil) if no resources
+// of that type exist.
 func (m *InMemory) List(resourceType string) []any {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	resourceEntries := m.resources[resourceType]
-	result := make([]any, 0, len(resourceEntries))
+	if len(resourceEntries) == 0 {
+		return make([]any, 0)
+	}
 
-	for _, entry := range resourceEntries {
-		result = append(result, entry.data)
+	// Collect entries and sort by ID for deterministic iteration order.
+	sorted := make([]*entry, 0, len(resourceEntries))
+	for _, e := range resourceEntries {
+		sorted = append(sorted, e)
+	}
+
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].id < sorted[j].id
+	})
+
+	result := make([]any, len(sorted))
+	for i, e := range sorted {
+		result[i] = e.data
 	}
 
 	return result

@@ -84,6 +84,24 @@ func TestInMemory_List(t *testing.T) {
 	assert.Contains(t, pets, any("Rex"))
 }
 
+func TestInMemory_List_DeterministicOrder(t *testing.T) {
+	s := NewInMemory(0)
+
+	// Insert in non-alphabetical order.
+	require.NoError(t, s.Put("pets", "c", "Charlie"))
+	require.NoError(t, s.Put("pets", "a", "Alpha"))
+	require.NoError(t, s.Put("pets", "b", "Bravo"))
+
+	// List should always return sorted by ID.
+	for range 10 {
+		pets := s.List("pets")
+		require.Len(t, pets, 3)
+		assert.Equal(t, "Alpha", pets[0])
+		assert.Equal(t, "Bravo", pets[1])
+		assert.Equal(t, "Charlie", pets[2])
+	}
+}
+
 func TestInMemory_List_EmptyType(t *testing.T) {
 	s := NewInMemory(0)
 

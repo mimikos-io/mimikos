@@ -13,11 +13,15 @@ import (
 var versionSegment = regexp.MustCompile(`^(?:v\d+|api)$`)
 
 // InferResourceIdentity extracts a resource type and ID from the path pattern,
-// path parameters, and response body. It uses a three-strategy approach:
+// path parameters, response body, and an optional ID field hint. It uses a
+// six-strategy approach:
 //
-//  1. Top-level "id" field in the response body (case-insensitive)
-//  2. Last path parameter name matched against path params map
-//  3. Fallback: deterministic UUID derived from path and body
+//  1. Exact match: path param name matches body field (case-insensitive)
+//  2. Suffix strip: strip resource prefix from param, match remainder in body
+//  3. ID field hint: precomputed from fetch variant's path param
+//  4. Body "id" fallback: universal convention
+//  5. Path param value: from pathParams map (for fetch/update/delete where body is nil)
+//  6. Deterministic UUID fallback
 //
 // Resource type is the collection segment preceding the last path parameter,
 // or the last non-version segment for parameterless paths.
@@ -25,9 +29,10 @@ func InferResourceIdentity(
 	pathPattern string,
 	pathParams map[string]string,
 	responseBody any,
+	idFieldHint string,
 ) (string, string) {
 	resourceType := extractResourceType(pathPattern)
-	resourceID := extractResourceID(pathPattern, pathParams, responseBody)
+	resourceID := extractResourceID(pathPattern, pathParams, responseBody, idFieldHint)
 
 	return resourceType, resourceID
 }
@@ -69,52 +74,89 @@ func extractResourceType(pathPattern string) string {
 	return lastCollection
 }
 
-// extractResourceID extracts a resource ID using the three-strategy approach.
+// extractResourceID extracts a resource ID using the six-strategy approach.
+// Strategies 1-4 examine the response body (used by handleCreate which has
+// a generated response). Strategy 5 uses pathParams (used by fetch/update/delete
+// where body is nil). Strategy 6 is the deterministic UUID fallback.
+//
+//nolint:gocognit // sequential strategy chain — splitting would obscure the priority order
 func extractResourceID(
 	pathPattern string,
 	pathParams map[string]string,
 	responseBody any,
+	idFieldHint string,
 ) string {
 	body, ok := responseBody.(map[string]any)
+	lastParam := LastPathParam(pathPattern)
 
-	// Strategy 1: top-level "id" field — exact match first, then case-insensitive
-	// fallback. Exact-first eliminates non-determinism from Go's randomized map
-	// iteration when multiple case variants exist (e.g., "id" and "ID").
-	if ok {
-		if val, exists := body["id"]; exists {
+	// Strategy 1: Exact match — path param name matches body field (case-insensitive).
+	// Covers: Notion (id), Spotify (id), api.video (liveStreamId), Twilio (Sid→sid).
+	if ok && lastParam != "" {
+		if val := findField(body, lastParam); val != nil {
 			return coerceToString(val)
 		}
+	}
 
-		for key, val := range body {
-			if strings.EqualFold(key, "id") {
+	// Strategy 2: Suffix strip — strip resource prefix from param name, match remainder.
+	// Covers: Petstore (petId→id), Asana (task_gid→gid), GitHub (comment_id→id).
+	if ok && lastParam != "" {
+		resourceType := extractResourceType(pathPattern)
+		if remainder := StripResourcePrefix(lastParam, resourceType); remainder != "" {
+			if val := findField(body, remainder); val != nil {
 				return coerceToString(val)
 			}
 		}
 	}
 
-	// Strategy 2: last path parameter value from params map.
-	lastParam := lastPathParam(pathPattern)
+	// Strategy 3: ID field hint — precomputed from fetch variant's path param.
+	// Covers: create operations with no path param (POST /projects → gid).
+	// Only set when suffix-stripping produces a result (see computeIDFieldHint).
+	if ok && idFieldHint != "" {
+		if val := findField(body, idFieldHint); val != nil {
+			return coerceToString(val)
+		}
+	}
+
+	// Strategy 4: Body "id" fallback — universal convention.
+	// Covers: Stripe ({customer}→id), any spec using plain "id".
+	if ok {
+		if val := findField(body, "id"); val != nil {
+			return coerceToString(val)
+		}
+	}
+
+	// Strategy 5: Path param value from params map (for fetch/update/delete).
+	// When body is nil (non-create operations), the ID comes from the URL path.
 	if lastParam != "" {
 		if val, exists := pathParams[lastParam]; exists {
 			return val
 		}
-
-		// Also check if the param name matches a body field.
-		if ok {
-			if val, exists := body[lastParam]; exists {
-				return coerceToString(val)
-			}
-		}
 	}
 
-	// Strategy 3: deterministic fallback UUID.
+	// Strategy 6: Deterministic fallback UUID.
 	return deterministicUUID(pathPattern, responseBody)
 }
 
-// lastPathParam returns the name of the last path parameter in a pattern.
+// findField looks up a field by name, exact match first, then case-insensitive.
+// Returns nil if not found.
+func findField(body map[string]any, name string) any {
+	if val, exists := body[name]; exists {
+		return val
+	}
+
+	for key, val := range body {
+		if strings.EqualFold(key, name) {
+			return val
+		}
+	}
+
+	return nil
+}
+
+// LastPathParam returns the name of the last path parameter in a pattern.
 // For "/users/{userId}/orders/{orderId}", it returns "orderId".
 // Returns empty string if no parameters are present.
-func lastPathParam(pathPattern string) string {
+func LastPathParam(pathPattern string) string {
 	segments := splitPath(pathPattern)
 
 	for i := len(segments) - 1; i >= 0; i-- {
@@ -124,6 +166,78 @@ func lastPathParam(pathPattern string) string {
 	}
 
 	return ""
+}
+
+// StripResourcePrefix strips the singular resource type prefix from a path
+// parameter name. Handles both camelCase and underscore separators.
+//
+// Examples:
+//   - StripResourcePrefix("petId", "pets") → "id" (camelCase: pet + Id)
+//   - StripResourcePrefix("task_gid", "tasks") → "gid" (underscore: task_ + gid)
+//   - StripResourcePrefix("comment_id", "comments") → "id" (underscore: comment_ + id)
+//   - StripResourcePrefix("id", "pets") → "" (no prefix to strip)
+//   - StripResourcePrefix("customer", "customers") → "" (no remainder after strip)
+func StripResourcePrefix(paramName, resourceType string) string {
+	singular := Singularize(resourceType)
+	if singular == "" {
+		return ""
+	}
+
+	lowerParam := strings.ToLower(paramName)
+	lowerSingular := strings.ToLower(singular)
+
+	// Check underscore separator: "task_gid" → strip "task_" → "gid"
+	if strings.HasPrefix(lowerParam, lowerSingular+"_") {
+		remainder := paramName[len(singular)+1:] // preserve original case
+		if remainder != "" {
+			return remainder
+		}
+	}
+
+	// Check camelCase boundary: "petId" → strip "pet" → "Id" → lowercase → "id"
+	if strings.HasPrefix(lowerParam, lowerSingular) && len(paramName) > len(singular) {
+		rest := paramName[len(singular):]
+		// Verify camelCase boundary: next char must be uppercase.
+		if len(rest) > 0 && rest[0] >= 'A' && rest[0] <= 'Z' {
+			return strings.ToLower(rest[:1]) + rest[1:]
+		}
+	}
+
+	return ""
+}
+
+// Singularize performs naive English singularization of a collection name.
+// Handles common URL path segment patterns: "pets"→"pet", "tasks"→"task",
+// "categories"→"category", "addresses"→"address", "statuses"→"status".
+//
+// Known limitations: irregular plurals (indices→index, people→person) are not
+// handled. These are extremely rare as URL path segments.
+func Singularize(plural string) string {
+	if plural == "" {
+		return ""
+	}
+
+	lower := strings.ToLower(plural)
+
+	// -ies → -y: "categories" → "category"
+	if strings.HasSuffix(lower, "ies") {
+		return plural[:len(plural)-3] + "y"
+	}
+
+	// -ses, -xes, -zes, -ches, -shes → drop "es": "addresses" → "address"
+	if strings.HasSuffix(lower, "ses") || strings.HasSuffix(lower, "xes") ||
+		strings.HasSuffix(lower, "zes") || strings.HasSuffix(lower, "ches") ||
+		strings.HasSuffix(lower, "shes") {
+		return plural[:len(plural)-2]
+	}
+
+	// -s → drop "s": "pets" → "pet"
+	if strings.HasSuffix(lower, "s") && !strings.HasSuffix(lower, "ss") {
+		return plural[:len(plural)-1]
+	}
+
+	// Already singular or uncountable.
+	return plural
 }
 
 // splitPath splits a URL path into non-empty segments.

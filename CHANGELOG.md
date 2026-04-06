@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-04-05
+
+### Changed
+
+#### Wrapper-Aware Stateful Mode
+- Stateful mode now works with complex real-world specs (Asana, Stripe-style) that use response wrappers and non-standard ID fields
+- Object-wrapped responses (e.g., `{data: {...}}`) are unwrapped before storage and re-wrapped on read — store canonical resources, format at handler boundary
+- Object-wrapped list responses (e.g., `{results: [...], has_more: true}`) generate envelope from schema and inject stored resources into the detected array slot
+- Request body unwrapping for update operations — prevents corrupted merge when specs wrap request bodies
+- Delete operations now use the spec-defined success code and generate a response body for non-204 deletes (e.g., Asana returns 200 with `{data: {}}`)
+- All stateful handlers use `entry.SuccessCode` from the behavior map instead of hardcoded status codes
+
+#### Expanded Resource Identity Extraction
+- Resource ID extraction expanded from top-level `id` / path parameter / UUID fallback to a 6-strategy algorithm
+- Strategy order: exact body field match → suffix strip → ID field hint → body `id` fallback → path param value → deterministic UUID
+- Covers: Notion (`id`), Spotify (`id`), Asana (`gid` via suffix strip), Twilio (`sid`), Stripe (`{customer}` → body `id`), api.video (`liveStreamId`)
+
+#### Startup Metadata Detection
+- New startup pipeline annotates behavior map with wrapper keys, list array keys, and ID field hints
+- Structural detection: wrapper key = single-property object resolving to object type; list array key = single array-typed property
+- `allOf`-aware type checking for specs using JSON Schema composition (Asana, Spotify)
+
+#### Deterministic List Ordering
+- `List()` now returns resources sorted by resource ID — previously relied on Go map iteration order which is nondeterministic
+
 ## [0.2.0] - 2026-04-04
 
 ### Added

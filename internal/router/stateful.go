@@ -31,11 +31,11 @@ func (h *Handler) handleStatefulMode(
 	case model.BehaviorFetch:
 		h.handleFetch(w, r, entry)
 	case model.BehaviorList:
-		h.handleList(w, entry)
+		h.handleList(w, r, entry, gen, body)
 	case model.BehaviorUpdate:
 		h.handleUpdate(w, r, entry, body)
 	case model.BehaviorDelete:
-		h.handleDelete(w, r, entry)
+		h.handleDelete(w, r, entry, gen, body)
 	case model.BehaviorGeneric:
 		return false
 	default:
@@ -45,8 +45,8 @@ func (h *Handler) handleStatefulMode(
 	return true
 }
 
-// handleCreate generates a response body from the schema, stores the resource,
-// and writes a 201 response.
+// handleCreate generates a response body from the schema, stores the unwrapped
+// resource, and writes the original (potentially wrapped) response.
 func (h *Handler) handleCreate(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -62,27 +62,31 @@ func (h *Handler) handleCreate(
 		return
 	}
 
-	pathParams := extractPathParams(r, entry.PathPattern)
-	resourceType, resourceID := state.InferResourceIdentity(entry.PathPattern, pathParams, responseBody)
+	// Unwrap for storage and identity extraction.
+	resource := unwrapResource(responseBody, entry.WrapperKey)
 
-	if err := h.store.Put(resourceType, resourceID, responseBody); err != nil {
+	pathParams := extractPathParams(r, entry.PathPattern)
+	resourceType, resourceID := state.InferResourceIdentity(entry.PathPattern, pathParams, resource, entry.IDFieldHint)
+
+	if err := h.store.Put(resourceType, resourceID, resource); err != nil {
 		writeProblem(w, http.StatusInternalServerError, "failed to store resource: "+err.Error())
 
 		return
 	}
 
+	// Return the full generated response (wrapped if spec uses wrapper).
 	writeJSON(w, scenario.StatusCode, responseBody)
 }
 
-// handleFetch looks up a resource by ID from the path and writes it as a
-// 200 response, or writes a 404 if not found.
+// handleFetch looks up a resource by ID from the path, re-wraps it if needed,
+// and writes it as a 200 response. Writes 404 if not found.
 func (h *Handler) handleFetch(
 	w http.ResponseWriter,
 	r *http.Request,
 	entry model.BehaviorEntry,
 ) {
 	pathParams := extractPathParams(r, entry.PathPattern)
-	resourceType, resourceID := state.InferResourceIdentity(entry.PathPattern, pathParams, nil)
+	resourceType, resourceID := state.InferResourceIdentity(entry.PathPattern, pathParams, nil, entry.IDFieldHint)
 
 	data, found := h.store.Get(resourceType, resourceID)
 	if !found {
@@ -91,27 +95,79 @@ func (h *Handler) handleFetch(
 		return
 	}
 
-	writeJSON(w, http.StatusOK, data)
+	writeJSON(w, entry.SuccessCode, wrapResource(data, entry.WrapperKey))
 }
 
 // handleList returns all stored resources of the type derived from the path
-// pattern. Returns an empty array if no resources exist.
+// pattern. For bare-array list schemas, returns a JSON array directly.
+// For object-wrapped list schemas, generates the envelope from the schema
+// (pagination metadata, etc.) and replaces the array slot with stored resources.
 func (h *Handler) handleList(
 	w http.ResponseWriter,
+	r *http.Request,
 	entry model.BehaviorEntry,
+	gen *generator.DataGenerator,
+	body []byte,
 ) {
 	resourceType := state.ResourceType(entry.PathPattern)
 	items := h.store.List(resourceType)
 
-	writeJSON(w, http.StatusOK, items)
+	if entry.ListArrayKey == "" {
+		// Bare array (Petstore, GitHub).
+		writeJSON(w, entry.SuccessCode, items)
+
+		return
+	}
+
+	// Object-wrapped list: generate the full envelope from schema
+	// (produces pagination metadata, type discriminators, etc.),
+	// then replace the array slot with actual stored resources.
+	scenario := selectSuccess(&entry)
+	seed := generator.Fingerprint(r.Method, r.URL.Path, r.URL.Query(), body)
+	envelope := h.generateListEnvelope(gen, scenario, seed)
+	envelope[entry.ListArrayKey] = items
+
+	writeJSON(w, entry.SuccessCode, envelope)
 }
 
-// handleUpdate merges the request body onto the stored resource and writes a
-// 200 response. Both PUT and PATCH use shallow merge: request body fields
-// overwrite stored fields, unmentioned fields are preserved. This matches
-// developer expectations — a mock server should mimic real service behavior
-// where PATCH updates specific fields and PUT replaces with the full
-// representation (but preserves server-generated fields like id).
+// generateListEnvelope produces the list response skeleton from the schema.
+// Returns a map with all non-array fields populated from the generator
+// (pagination metadata, type discriminators). The array slot will be
+// overwritten by the caller with actual stored resources.
+func (h *Handler) generateListEnvelope(
+	gen *generator.DataGenerator,
+	scenario *SelectedScenario,
+	seed int64,
+) map[string]any {
+	if scenario.Schema == nil || scenario.Schema.Schema == nil {
+		return make(map[string]any)
+	}
+
+	body, err := gen.Generate(scenario.Schema.Schema, seed)
+	if err != nil {
+		h.logger.Warn("failed to generate list envelope from schema",
+			"schema", scenario.Schema.Name,
+			"error", err.Error(),
+		)
+
+		return make(map[string]any)
+	}
+
+	m, ok := body.(map[string]any)
+	if !ok {
+		h.logger.Warn("list envelope generation produced non-object",
+			"schema", scenario.Schema.Name,
+		)
+
+		return make(map[string]any)
+	}
+
+	return m
+}
+
+// handleUpdate parses and optionally unwraps the request body, merges it onto
+// the stored resource (cloned to avoid mutation), re-wraps if needed, and writes
+// a 200 response.
 func (h *Handler) handleUpdate(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -119,7 +175,7 @@ func (h *Handler) handleUpdate(
 	body []byte,
 ) {
 	pathParams := extractPathParams(r, entry.PathPattern)
-	resourceType, resourceID := state.InferResourceIdentity(entry.PathPattern, pathParams, nil)
+	resourceType, resourceID := state.InferResourceIdentity(entry.PathPattern, pathParams, nil, entry.IDFieldHint)
 
 	stored, found := h.store.Get(resourceType, resourceID)
 	if !found {
@@ -128,12 +184,16 @@ func (h *Handler) handleUpdate(
 		return
 	}
 
-	merged, err := shallowMerge(stored, body)
+	// Parse and optionally unwrap request body. This is the single place
+	// where malformed JSON produces a 400 error.
+	patch, err := parseRequestBody(body, entry.WrapperKey)
 	if err != nil {
 		writeProblem(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 
 		return
 	}
+
+	merged := shallowMerge(stored, patch)
 
 	if putErr := h.store.Put(resourceType, resourceID, merged); putErr != nil {
 		writeProblem(w, http.StatusInternalServerError, "failed to store resource: "+putErr.Error())
@@ -141,44 +201,43 @@ func (h *Handler) handleUpdate(
 		return
 	}
 
-	writeJSON(w, http.StatusOK, merged)
+	writeJSON(w, entry.SuccessCode, wrapResource(merged, entry.WrapperKey))
 }
 
-// shallowMerge overlays parsed request body fields onto the stored resource.
-// Top-level keys in the request body overwrite keys in the stored resource;
-// keys not present in the request body are preserved from the stored resource.
-func shallowMerge(stored any, reqBody []byte) (map[string]any, error) {
+// shallowMerge clones the stored resource and overlays patch fields.
+// Top-level keys in patch overwrite stored keys; keys not in patch are
+// preserved. Always returns a new map — never mutates the input.
+func shallowMerge(stored any, patch map[string]any) map[string]any {
 	storedMap, ok := stored.(map[string]any)
 	if !ok {
-		// Stored resource is not an object — replace entirely.
 		storedMap = make(map[string]any)
 	}
 
-	if len(reqBody) == 0 {
-		return storedMap, nil
-	}
-
-	var patch map[string]any
-	if err := json.Unmarshal(reqBody, &patch); err != nil {
-		return nil, err
+	// Clone to avoid mutating the store's reference.
+	clone := make(map[string]any, len(storedMap)+len(patch))
+	for k, v := range storedMap {
+		clone[k] = v
 	}
 
 	for k, v := range patch {
-		storedMap[k] = v
+		clone[k] = v
 	}
 
-	return storedMap, nil
+	return clone
 }
 
-// handleDelete removes a resource from the store and writes a 204 response,
-// or a 404 if the resource does not exist.
+// handleDelete removes a resource from the store and writes the spec-defined
+// success response. Most specs return 204 No Content; some (Asana) return 200
+// with a response body. Writes 404 if the resource does not exist.
 func (h *Handler) handleDelete(
 	w http.ResponseWriter,
 	r *http.Request,
 	entry model.BehaviorEntry,
+	gen *generator.DataGenerator,
+	body []byte,
 ) {
 	pathParams := extractPathParams(r, entry.PathPattern)
-	resourceType, resourceID := state.InferResourceIdentity(entry.PathPattern, pathParams, nil)
+	resourceType, resourceID := state.InferResourceIdentity(entry.PathPattern, pathParams, nil, entry.IDFieldHint)
 
 	if !h.store.Delete(resourceType, resourceID) {
 		writeStatefulNotFound(w, resourceType, resourceID)
@@ -186,7 +245,92 @@ func (h *Handler) handleDelete(
 		return
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	if entry.SuccessCode == http.StatusNoContent {
+		w.WriteHeader(http.StatusNoContent)
+
+		return
+	}
+
+	// Non-204 delete (e.g., Asana returns 200 with {data: {}}).
+	// Generate the response body from the schema.
+	scenario := selectSuccess(&entry)
+	seed := generator.Fingerprint(r.Method, r.URL.Path, r.URL.Query(), body)
+
+	responseBody, ok := h.generateResponseBody(w, gen, scenario, seed)
+	if !ok {
+		return
+	}
+
+	writeJSON(w, entry.SuccessCode, responseBody)
+}
+
+// unwrapResource extracts the inner resource from a potentially wrapped body.
+// If wrapperKey is empty (flat response), returns body unchanged.
+// If wrapperKey is set, returns body[wrapperKey] if it's a map, or body unchanged.
+func unwrapResource(body any, wrapperKey string) any {
+	if wrapperKey == "" {
+		return body
+	}
+
+	m, ok := body.(map[string]any)
+	if !ok {
+		return body
+	}
+
+	inner, exists := m[wrapperKey]
+	if !exists {
+		return body
+	}
+
+	return inner
+}
+
+// wrapResource wraps a resource in a single-key envelope.
+// If wrapperKey is empty (flat response), returns resource unchanged.
+func wrapResource(resource any, wrapperKey string) any {
+	if wrapperKey == "" {
+		return resource
+	}
+
+	return map[string]any{wrapperKey: resource}
+}
+
+// parseRequestBody unmarshals the request body JSON and optionally unwraps
+// it through the wrapper key. Ownership of JSON parsing is here, not in
+// shallowMerge — this function is the single place where malformed JSON
+// produces a parse error.
+//
+// When wrapperKey is "": parses body into map[string]any.
+// When wrapperKey is "data": parses body, extracts body["data"] as map[string]any.
+// Returns empty map (not nil) for empty body.
+func parseRequestBody(body []byte, wrapperKey string) (map[string]any, error) {
+	if len(body) == 0 {
+		return make(map[string]any), nil
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, err
+	}
+
+	if wrapperKey == "" {
+		return parsed, nil
+	}
+
+	// Unwrap: extract inner object from wrapper key.
+	inner, exists := parsed[wrapperKey]
+	if !exists {
+		// No wrapper key in body — pass through the full parsed body.
+		// The client may have sent an unwrapped PATCH even for a wrapped spec.
+		return parsed, nil
+	}
+
+	innerMap, ok := inner.(map[string]any)
+	if !ok {
+		return parsed, nil
+	}
+
+	return innerMap, nil
 }
 
 // extractPathParams reads path parameter values from the request using Go 1.22+
