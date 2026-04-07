@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -20,7 +21,8 @@ import (
 	"github.com/mimikos-io/mimikos/internal/server"
 )
 
-// Build-time variables injected via ldflags.
+// Build-time variables injected via ldflags. When not set (e.g., go install),
+// init resolves version from Go module info embedded by the toolchain.
 //
 //nolint:gochecknoglobals // ldflags-injected build metadata
 var (
@@ -28,6 +30,39 @@ var (
 	gitCommit = "unknown"
 	buildTime = "unknown"
 )
+
+// shortHashLen is the number of characters used for abbreviated git commit hashes.
+const shortHashLen = 7
+
+// resolveVersionFromBuildInfo populates version, gitCommit, and buildTime from
+// Go module info embedded by the toolchain. This covers the go install path
+// where ldflags are not injected.
+func resolveVersionFromBuildInfo() {
+	if version != "0.0.0-dev" {
+		return // ldflags were set (GoReleaser build), nothing to resolve.
+	}
+
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+
+	// go install ...@v0.2.2 sets info.Main.Version to "v0.2.2".
+	if info.Main.Version != "" && info.Main.Version != "(devel)" {
+		version = info.Main.Version
+	}
+
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			if len(s.Value) >= shortHashLen {
+				gitCommit = s.Value[:shortHashLen]
+			}
+		case "vcs.time":
+			buildTime = s.Value
+		}
+	}
+}
 
 // ErrInvalidLogLevel is returned when an unrecognized log level string is provided.
 var ErrInvalidLogLevel = errors.New("invalid log level")
@@ -52,6 +87,7 @@ const maxPort = 65535
 const readHeaderTimeout = 10 * time.Second
 
 func main() {
+	resolveVersionFromBuildInfo()
 	os.Exit(run(os.Args[1:], os.Stderr))
 }
 
