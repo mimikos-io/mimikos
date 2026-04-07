@@ -98,6 +98,10 @@ type pathInfo struct {
 
 	// lastSegment is the final segment of the normalized path (without leading slash).
 	lastSegment string
+
+	// segments holds the normalized, non-empty path segments. Used by
+	// sub-resource detection to check for parent path parameters.
+	segments []string
 }
 
 // applyLayer1 classifies based on HTTP method and path structure.
@@ -166,7 +170,20 @@ func (c *Classifier) classifyDELETE(info pathInfo) Result {
 		return Result{Type: model.BehaviorDelete, Confidence: confidenceStrong}
 	}
 
-	// DELETE on collection: bulk delete (e.g., DELETE /me/albums on Spotify).
+	// Sub-resource delete: DELETE /resource/{id}/sub-resource.
+	// The parent path parameter scopes the sub-resource, and the singular
+	// last segment names the specific sub-resource being deleted (e.g.,
+	// DELETE /live-streams/{liveStreamId}/thumbnail).
+	//
+	// Excludes:
+	//   - /me/albums: no parent path parameter
+	//   - /playlists/{id}/tracks: plural "tracks" → bulk collection operation
+	//   - /installations/{id}/suspended: past participle → state toggle
+	if hasParentPathParam(info.segments) && looksLikeSingularSubResource(info.lastSegment) {
+		return Result{Type: model.BehaviorDelete, Confidence: confidenceModerate}
+	}
+
+	// DELETE on collection without parent param: bulk delete (e.g., DELETE /me/albums).
 	return Result{Type: model.BehaviorGeneric, Confidence: confidenceModerate}
 }
 
@@ -199,6 +216,7 @@ func analyzePath(raw string) pathInfo {
 	info := pathInfo{
 		lastSegment: last,
 		isItem:      isPathParam(last),
+		segments:    segments,
 	}
 
 	// Check for action verbs: the last non-parameter segment.
@@ -241,7 +259,7 @@ func isActionVerb(segment string) bool {
 	}
 
 	// Tokenize camelCase/hyphenated segments for compound action names.
-	tokens := TokenizeOperationID(segment)
+	tokens := Tokenize(segment)
 	if len(tokens) <= 1 {
 		// Single token already checked above.
 		return false
@@ -249,6 +267,48 @@ func isActionVerb(segment string) bool {
 
 	for _, token := range tokens {
 		if _, ok := actionVerbs[token]; ok {
+			return true
+		}
+	}
+
+	return false
+}
+
+// looksLikeSingularSubResource returns true if the segment name looks like a
+// singular sub-resource that can be individually deleted. Returns false for:
+//   - plural names ending in 's' (collection/bulk operations: tracks, followers)
+//   - past participles ending in 'ed' (state toggles: suspended, enabled)
+func looksLikeSingularSubResource(segment string) bool {
+	lower := strings.ToLower(segment)
+
+	if strings.HasSuffix(lower, "s") {
+		return false
+	}
+
+	if strings.HasSuffix(lower, "ed") {
+		return false
+	}
+
+	return true
+}
+
+// hasParentPathParam returns true if any segment before the last one is a path
+// parameter. This indicates the final static segment is a sub-resource owned
+// by the parametrized parent (e.g., /live-streams/{liveStreamId}/thumbnail).
+// Returns false for paths like /me/albums where no segment is a parameter.
+// minSubResourceSegments is the minimum path depth for a sub-resource pattern.
+// A sub-resource like /resource/{id}/sub requires at least 3 segments, but the
+// parent param check only examines segments[:len-1], so we need at least 2.
+const minSubResourceSegments = 2
+
+func hasParentPathParam(segments []string) bool {
+	if len(segments) < minSubResourceSegments {
+		return false
+	}
+
+	// Check all segments except the last (which is the sub-resource itself).
+	for _, seg := range segments[:len(segments)-1] {
+		if isPathParam(seg) {
 			return true
 		}
 	}

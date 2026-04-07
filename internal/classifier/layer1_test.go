@@ -194,3 +194,31 @@ func TestAnalyzePath_SingularActionVerbOnItemPath(t *testing.T) {
 	assert.True(t, info.isAction,
 		"singular 'volume' on item path is flagged as action (known L1 limitation)")
 }
+
+// --- Path: hasParentPathParam ---
+
+func TestHasParentPathParam(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		expected bool
+	}{
+		{"sub-resource with parent ID", "/live-streams/{liveStreamId}/thumbnail", true},
+		{"sub-resource with parent ID 2", "/players/{playerId}/logo", true},
+		{"nested with parent", "/users/{userId}/orders/{orderId}/items", true},
+		{"/me/ no param segment", "/me/albums", false},
+		{"simple collection", "/users", false},
+		{"simple item", "/users/{id}", false},
+		{"root", "/", false},
+		{"empty", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			segments := splitSegments(normalizePath(tt.path))
+			got := hasParentPathParam(segments)
+			assert.Equal(t, tt.expected, got,
+				"hasParentPathParam(%q) = %v, want %v", tt.path, got, tt.expected)
+		})
+	}
+}

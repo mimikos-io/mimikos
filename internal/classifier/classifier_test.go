@@ -233,6 +233,50 @@ func TestClassify_DELETE_Collection_IsGeneric(t *testing.T) {
 	}
 }
 
+func TestClassify_DELETE_SubResource_IsDelete(t *testing.T) {
+	c := newClassifier()
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"delete thumbnail", "/live-streams/{liveStreamId}/thumbnail"},
+		{"delete logo", "/players/{playerId}/logo"},
+		{"nested sub-resource", "/users/{userId}/orders/{orderId}/receipt"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := c.Classify(op("DELETE", tt.path))
+			assert.Equal(t, model.BehaviorDelete, result.Type,
+				"DELETE on sub-resource with parent ID should be delete")
+			assert.InDelta(t, 0.6, result.Confidence, 0.01)
+		})
+	}
+}
+
+func TestClassify_DELETE_NonSubResource_StaysGeneric(t *testing.T) {
+	c := newClassifier()
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"no param parent /me/albums", "/me/albums"},
+		{"plural sub-resource (bulk)", "/playlists/{playlist_id}/tracks"},
+		{"plural followers (bulk)", "/playlists/{playlist_id}/followers"},
+		{"past participle (state toggle)", "/app/installations/{installation_id}/suspended"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := c.Classify(op("DELETE", tt.path))
+			assert.Equal(t, model.BehaviorGeneric, result.Type,
+				"DELETE %s should stay generic", tt.path)
+		})
+	}
+}
+
 // --- Layer 1: Twilio path normalization ---
 
 func TestClassify_TwilioJSONSuffix(t *testing.T) {
