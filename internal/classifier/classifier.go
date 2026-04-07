@@ -3,9 +3,9 @@
 // differentiator.
 //
 // The classifier uses a layered approach:
-//   - Layer 1: HTTP method + path pattern (collection vs item)
+//   - Layer 1: HTTP method + path pattern (collection vs item, sub-resource delete)
 //   - Layer 2: Response schema signals (status codes, array vs object)
-//   - Layer 3: operationId keyword hints
+//   - Layer 3: operationId + summary keyword hints (with targeted list↔fetch override)
 //   - Fallback: generic with low confidence
 package classifier
 

@@ -16,18 +16,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// expectedCorpus represents the expected classification JSON file format.
-type expectedCorpus struct {
-	Spec            string            `json:"spec"`
-	Source          string            `json:"source"`
-	TotalOperations int               `json:"total_operations"` //nolint:tagliatelle // matches existing test corpus files
-	Classifications map[string]string `json:"classifications"`
-	//nolint:tagliatelle // matches corpus file format
-	OperationIDs map[string]string `json:"operation_ids,omitempty"`
-	Summaries    map[string]string `json:"summaries,omitempty"`
-	Descriptions map[string]string `json:"descriptions,omitempty"`
-	Notes        map[string]string `json:"notes,omitempty"`
-}
+type (
+	// expectedCorpus represents the expected classification JSON file format.
+	expectedCorpus struct {
+		Spec            string            `json:"spec"`
+		Source          string            `json:"source"`
+		TotalOperations int               `json:"total_operations"` //nolint:tagliatelle // matches existing test corpus files
+		Classifications map[string]string `json:"classifications"`
+		//nolint:tagliatelle // matches corpus file format
+		OperationIDs map[string]string `json:"operation_ids,omitempty"`
+		Summaries    map[string]string `json:"summaries,omitempty"`
+		Descriptions map[string]string `json:"descriptions,omitempty"`
+		Notes        map[string]string `json:"notes,omitempty"`
+	}
+
+	// misclassification records a single classification disagreement.
+	misclassification struct {
+		key      string
+		expected string
+		got      string
+	}
+)
 
 // testdataDir returns the absolute path to the testdata directory root.
 func testdataDir(t *testing.T) string {
@@ -50,13 +59,6 @@ func loadExpectedCorpus(t *testing.T, path string) expectedCorpus {
 	require.NoError(t, json.Unmarshal(data, &corpus))
 
 	return corpus
-}
-
-// misclassification records a single classification disagreement.
-type misclassification struct {
-	key      string
-	expected string
-	got      string
 }
 
 func TestCorpusAccuracy(t *testing.T) {
@@ -228,6 +230,13 @@ func TestCorpusAccuracy(t *testing.T) {
 			t.Logf("  ... and %d more", len(allMisses)-50)
 		}
 	}
+
+	// Accuracy threshold: fail if accuracy drops below the established baseline.
+	// Updated when classifier improvements are verified regression-free.
+	const minAccuracy = 95.0
+	assert.GreaterOrEqual(t, overallAccuracy, minAccuracy,
+		"corpus accuracy %.1f%% is below the required threshold of %.1f%%",
+		overallAccuracy, minAccuracy)
 
 	// Sanity checks: ensure meaningful corpus coverage.
 	assert.GreaterOrEqual(t, specsTested, 5,

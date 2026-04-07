@@ -13,10 +13,12 @@ Example: fix(classifier): resolve singleton detection for GET /me
 ## Type of Change
 <!-- Mark the appropriate option with an 'x' -->
 - [ ] Bug fix (non-breaking change which fixes an issue)
+- [ ] Patch feature (existing feature enhancement)
 - [ ] New feature (non-breaking change which adds functionality)
 - [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
 - [ ] Documentation update
 - [ ] Code refactoring
+- [ ] Infrastructure code
 - [ ] Performance optimization
 - [ ] CI/CD or workflow changes
 - [ ] Other (please describe):
