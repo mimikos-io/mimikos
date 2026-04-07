@@ -1,0 +1,147 @@
+openapi: "3.0.3"
+info:
+  title: E2E Classifier Improvements Test API
+  version: "1.0.0"
+  description: >
+    Test spec exercising the three classifier improvements:
+    (1) L3 summary scanning — POST-to-item with "Update" summary → update behavior
+    (2) L3 targeted list→fetch override — singleton GET with fetch keyword in operationId → fetch behavior
+    (3) L1 sub-resource delete — DELETE /resources/{id}/attachment → delete behavior
+paths:
+  /customers:
+    get:
+      operationId: listCustomers
+      summary: List all customers
+      responses:
+        "200":
+          description: List of customers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Customer"
+    post:
+      operationId: createCustomer
+      summary: Create a customer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewCustomer"
+      responses:
+        "201":
+          description: Customer created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+  /customers/{customer}:
+    get:
+      operationId: getCustomer
+      summary: Retrieve a customer
+      parameters:
+        - name: customer
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Customer details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+    # Stripe-style: POST to item path is update, not create.
+    # Without L3 summary scanning, this would be classified as create (201).
+    post:
+      operationId: updateCustomer
+      summary: Update a customer
+      parameters:
+        - name: customer
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewCustomer"
+      responses:
+        "200":
+          description: Customer updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+  /customers/{customer}/avatar:
+    # Sub-resource delete: singular last segment + parent has path param.
+    # Without L1 sub-resource delete detection, classified as generic.
+    delete:
+      operationId: deleteCustomerAvatar
+      summary: Delete customer avatar
+      parameters:
+        - name: customer
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Avatar deleted
+  /me:
+    # Singleton endpoint: GET on root-ish path, no path param.
+    # L1 classifies as list (collection path). L3 targeted override
+    # uses operationId keyword "show" at position > 0 to flip to fetch.
+    get:
+      operationId: users-showAuthenticated
+      summary: Show authenticated user
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+components:
+  schemas:
+    Customer:
+      type: object
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+    NewCustomer:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+    User:
+      type: object
+      required:
+        - id
+        - username
+      properties:
+        id:
+          type: string
+        username:
+          type: string
+        email:
+          type: string
+          format: email
