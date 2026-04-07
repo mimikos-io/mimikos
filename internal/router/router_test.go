@@ -444,6 +444,118 @@ func TestHandler_NilSchemaReturnsEmptyObject(t *testing.T) {
 	assert.Empty(t, body, "nil schema should produce empty object {}")
 }
 
+// --- Literal/wildcard sibling route conflict tests ---
+
+// conflictingPathsBehaviorMap creates a BehaviorMap where a literal path
+// (/items/shared) is a sibling of a wildcard path (/items/{id}).
+// Go 1.22+ ServeMux panics on this if routes are registered naively.
+func conflictingPathsBehaviorMap() *model.BehaviorMap {
+	bm := model.NewBehaviorMap()
+
+	// Wildcard: PUT /items/{id}
+	bm.Put(model.BehaviorEntry{
+		Method:      http.MethodPut,
+		PathPattern: "/items/{id}",
+		Type:        model.BehaviorUpdate,
+		SuccessCode: http.StatusOK,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusOK: {Name: "Item", Schema: petObjectSchema()},
+		},
+		Source:     model.SourceHeuristic,
+		Confidence: 0.9,
+	})
+
+	// Wildcard: DELETE /items/{id}
+	bm.Put(model.BehaviorEntry{
+		Method:          http.MethodDelete,
+		PathPattern:     "/items/{id}",
+		Type:            model.BehaviorDelete,
+		SuccessCode:     http.StatusNoContent,
+		ResponseSchemas: map[int]*model.CompiledSchema{},
+		Source:          model.SourceHeuristic,
+		Confidence:      0.9,
+	})
+
+	// Literal sibling: GET /items/shared
+	bm.Put(model.BehaviorEntry{
+		Method:      http.MethodGet,
+		PathPattern: "/items/shared",
+		Type:        model.BehaviorList,
+		SuccessCode: http.StatusOK,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusOK: {Name: "SharedItems", Schema: petArraySchema()},
+		},
+		Source:     model.SourceHeuristic,
+		Confidence: 0.9,
+	})
+
+	return bm
+}
+
+func newConflictingHandler() *Handler {
+	resp := merrors.NewResponder()
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
+
+	return NewHandler(conflictingPathsBehaviorMap(), &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+}
+
+func TestHandler_LiteralWildcardSibling_NoPanic(t *testing.T) {
+	// Must not panic when registering routes for specs with literal/wildcard siblings.
+	assert.NotPanics(t, func() {
+		newConflictingHandler()
+	})
+}
+
+func TestHandler_LiteralWildcardSibling_OperationRoutes(t *testing.T) {
+	h := newConflictingHandler()
+
+	t.Run("GET /items/shared returns 200", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/items/shared", nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+	})
+
+	t.Run("PUT /items/123 returns 200", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPut, "/items/123",
+			strings.NewReader(`{"name":"updated"}`))
+		req.Header.Set("Content-Type", "application/json")
+
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+	})
+
+	t.Run("DELETE /items/123 returns 204", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodDelete, "/items/123", nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusNoContent, rec.Code)
+	})
+}
+
+func TestHandler_LiteralWildcardSibling_MethodNotAllowed(t *testing.T) {
+	h := newConflictingHandler()
+
+	t.Run("POST /items/shared returns 405", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/items/shared", nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+		pd := parseProblemDetail(t, rec.Body.Bytes())
+		assert.Equal(t, "Method Not Allowed", pd["title"])
+	})
+
+	t.Run("GET /items/123 returns 405", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/items/123", nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+		pd := parseProblemDetail(t, rec.Body.Bytes())
+		assert.Equal(t, "Method Not Allowed", pd["title"])
+	})
+}
+
 // --- isJSONContentType unit tests (NB2) ---
 
 func TestIsJSONContentType(t *testing.T) {

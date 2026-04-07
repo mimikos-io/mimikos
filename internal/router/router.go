@@ -28,6 +28,23 @@ const maxBodySize = 10 * 1024 * 1024
 // contentTypeJSON is the standard JSON content type.
 const contentTypeJSON = "application/json"
 
+// methodsFor405 lists HTTP methods for which we register explicit 405 handlers
+// when a path does not define them. This avoids method-less catch-all patterns
+// that conflict with Go 1.22+ ServeMux's strict overlap detection.
+//
+// HEAD is excluded: ServeMux implicitly routes HEAD to GET handlers, so
+// registering HEAD 405 handlers creates cross-path conflicts when a literal
+// sibling has GET defined (e.g. HEAD /items/{id} vs GET /items/shared).
+//
+//nolint:gochecknoglobals
+var methodsFor405 = []string{
+	http.MethodGet,
+	http.MethodPost,
+	http.MethodPut,
+	http.MethodPatch,
+	http.MethodDelete,
+}
+
 type (
 	// Handler serves mock HTTP responses by matching requests to OpenAPI
 	// operations and orchestrating the runtime pipeline.
@@ -78,13 +95,33 @@ func NewHandler(
 		methodsByPath[entry.PathPattern] = append(methodsByPath[entry.PathPattern], entry.Method)
 	}
 
-	// Register method-less catch-all per path pattern for 405 responses.
+	// Register per-method 405 handlers for undefined methods on each path.
+	// We cannot use a method-less catch-all pattern because Go 1.22+ ServeMux
+	// panics when a method-less literal path (e.g. /items/shared) overlaps
+	// with a method-specific wildcard (e.g. PUT /items/{id}) — the literal is
+	// more specific in path but broader in methods, which ServeMux considers
+	// ambiguous. Registering explicit method-specific 405 handlers avoids this.
 	for pathPattern, methods := range methodsByPath {
 		sort.Strings(methods)
 
-		mux.HandleFunc(pathPattern, func(w http.ResponseWriter, r *http.Request) {
-			responder.MethodNotAllowed(w, r.Method, r.URL.Path, methods)
-		})
+		defined := make(map[string]bool, len(methods))
+		for _, m := range methods {
+			defined[m] = true
+		}
+
+		allowedMethods := methods // capture for closure
+
+		for _, m := range methodsFor405 {
+			if defined[m] {
+				continue
+			}
+
+			pattern := m + " " + pathPattern
+
+			mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+				responder.MethodNotAllowed(w, r.Method, r.URL.Path, allowedMethods)
+			})
+		}
 	}
 
 	// Default catch-all: any request that doesn't match a registered path
