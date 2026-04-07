@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-04-07
+
+### Changed
+
+#### Improved Behavioral Classification (92.2% → 96.2%)
+- L3 summary scanning: POST-to-item endpoints with CRUD keywords in `summary` (e.g., "Update a customer") are now correctly classified as update instead of create — fixes 6 Stripe-style POST-as-update endpoints
+- L3 targeted list→fetch override: singleton endpoints (e.g., `GET /me`) with CRUD keywords in operationId or summary are now correctly classified as fetch instead of list — fixes 6 endpoints across GitHub, API.video, and Twilio specs
+- L1 sub-resource delete detection: `DELETE /resource/{id}/sub-resource` with singular last segment is now classified as delete instead of generic — fixes 2 Spotify endpoints
+- Zero regressions across the 344-endpoint corpus
+
+### Added
+
+#### Classifier Improvement E2E Tests
+- End-to-end tests verifying POST-as-update, sub-resource delete, and singleton fetch patterns through the full pipeline
+- Strict mode validation for all classifier improvement patterns
+- Determinism verification for newly classified endpoints
+
 ## [0.2.1] - 2026-04-05
 
 ### Changed
