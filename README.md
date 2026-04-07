@@ -59,11 +59,16 @@ Download from [GitHub Releases](https://github.com/mimikos-io/mimikos/releases) 
 ```bash
 # macOS / Linux
 tar -xzf mimikos_<os>_<arch>.tar.gz
+xattr -d com.apple.quarantine mimikos  # macOS only — remove Gatekeeper quarantine
 sudo mv mimikos /usr/local/bin/
 
 # Verify
 mimikos --version
 ```
+
+> **macOS note:** The pre-built binary is not code-signed, so macOS Gatekeeper will block it on first run. The `xattr`
+> command above removes the quarantine flag. Alternatively, install via `go install` which builds from source and avoids
+> this entirely.
 
 On Windows, download the `.zip`, extract `mimikos.exe`, and add it to your `PATH`.
 
