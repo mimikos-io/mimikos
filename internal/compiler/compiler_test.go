@@ -676,6 +676,280 @@ paths:
 	assert.Equal(t, "#/paths/~1pets~1{petId}/post/requestBody/content/application~1json/schema", reqRef.Pointer)
 }
 
+// --- Example Normalization ---
+
+func TestNormalizeExamples_StringExample(t *testing.T) {
+	doc := map[string]any{
+		"type":    "string",
+		"example": "Fido",
+	}
+
+	normalizeExamples(doc)
+
+	assert.Equal(t, []any{"Fido"}, doc["examples"])
+	assert.NotContains(t, doc, "example", "example key should be removed")
+}
+
+func TestNormalizeExamples_IntegerExample(t *testing.T) {
+	doc := map[string]any{
+		"type":    "integer",
+		"example": 42,
+	}
+
+	normalizeExamples(doc)
+
+	assert.Equal(t, []any{42}, doc["examples"])
+	assert.NotContains(t, doc, "example")
+}
+
+func TestNormalizeExamples_BothExampleAndExamples(t *testing.T) {
+	// When both exist, examples (array) is preserved and example is removed.
+	doc := map[string]any{
+		"type":     "string",
+		"example":  "ignored",
+		"examples": []any{"kept"},
+	}
+
+	normalizeExamples(doc)
+
+	assert.Equal(t, []any{"kept"}, doc["examples"], "existing examples should be preserved")
+	assert.NotContains(t, doc, "example", "example key should be removed")
+}
+
+func TestNormalizeExamples_NoExample(t *testing.T) {
+	doc := map[string]any{
+		"type": "string",
+	}
+
+	normalizeExamples(doc)
+
+	assert.NotContains(t, doc, "examples", "should not add examples when none present")
+}
+
+func TestNormalizeExamples_NestedSchemas(t *testing.T) {
+	doc := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"name": map[string]any{
+				"type":    "string",
+				"example": "Fido",
+			},
+			"age": map[string]any{
+				"type":    "integer",
+				"example": 3,
+			},
+		},
+	}
+
+	normalizeExamples(doc)
+
+	props, ok := doc["properties"].(map[string]any)
+	require.True(t, ok, "properties should be map[string]any")
+
+	nameSchema, ok := props["name"].(map[string]any)
+	require.True(t, ok, "name property should be map[string]any")
+
+	ageSchema, ok := props["age"].(map[string]any)
+	require.True(t, ok, "age property should be map[string]any")
+
+	assert.Equal(t, []any{"Fido"}, nameSchema["examples"])
+	assert.NotContains(t, nameSchema, "example")
+	assert.Equal(t, []any{3}, ageSchema["examples"])
+	assert.NotContains(t, ageSchema, "example")
+}
+
+func TestNormalizeExamples_ArrayItems(t *testing.T) {
+	doc := map[string]any{
+		"type": "array",
+		"items": map[string]any{
+			"type":    "string",
+			"example": "hello",
+		},
+	}
+
+	normalizeExamples(doc)
+
+	items, ok := doc["items"].(map[string]any)
+	require.True(t, ok, "items should be map[string]any")
+	assert.Equal(t, []any{"hello"}, items["examples"])
+	assert.NotContains(t, items, "example")
+}
+
+func TestNormalizeExamples_PropertyNamedExample_Preserved(t *testing.T) {
+	// A property *named* "example" in a properties map must not be destroyed.
+	// The properties map itself has no schema keywords — looksLikeSchema should
+	// return false, skipping normalization on the container.
+	doc := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"title": map[string]any{
+				"type": "string",
+			},
+			"example": map[string]any{
+				"type":        "string",
+				"description": "Usage example for this tutorial",
+			},
+		},
+	}
+
+	normalizeExamples(doc)
+
+	props, ok := doc["properties"].(map[string]any)
+	require.True(t, ok, "properties should be map[string]any")
+	assert.Contains(t, props, "example", "property named 'example' must survive normalization")
+	assert.NotContains(t, props, "examples", "should not create bogus 'examples' key in properties map")
+
+	// The property schema itself should be untouched (no example keyword on it).
+	exampleProp, ok := props["example"].(map[string]any)
+	require.True(t, ok, "example property should be map[string]any")
+	assert.Equal(t, "string", exampleProp["type"])
+}
+
+func TestNormalizeExamples_SchemaNamedExample_Preserved(t *testing.T) {
+	// A schema named "example" in components/schemas must not be destroyed.
+	doc := map[string]any{
+		"components": map[string]any{
+			"schemas": map[string]any{
+				"example": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"id": map[string]any{"type": "integer"},
+					},
+				},
+			},
+		},
+	}
+
+	normalizeExamples(doc)
+
+	components, ok := doc["components"].(map[string]any)
+	require.True(t, ok, "components should be map[string]any")
+
+	schemas, ok := components["schemas"].(map[string]any)
+	require.True(t, ok, "schemas should be map[string]any")
+
+	assert.Contains(t, schemas, "example", "schema named 'example' must survive normalization")
+	assert.NotContains(t, schemas, "examples")
+}
+
+func TestNormalizeExamples_NonSchemaMap_Unchanged(t *testing.T) {
+	// A map with "example" key but no schema keywords should not be modified.
+	doc := map[string]any{
+		"description": "some context",
+		"example":     "some value",
+	}
+
+	normalizeExamples(doc)
+
+	assert.Contains(t, doc, "example", "non-schema map should not be modified")
+	assert.NotContains(t, doc, "examples")
+}
+
+func TestLooksLikeSchema(t *testing.T) {
+	tests := []struct {
+		name string
+		obj  map[string]any
+		want bool
+	}{
+		{"type keyword", map[string]any{"type": "string"}, true},
+		{"$ref keyword", map[string]any{"$ref": "#/components/schemas/Pet"}, true},
+		{"allOf keyword", map[string]any{"allOf": []any{}}, true},
+		{"oneOf keyword", map[string]any{"oneOf": []any{}}, true},
+		{"anyOf keyword", map[string]any{"anyOf": []any{}}, true},
+		{"enum keyword", map[string]any{"enum": []any{"a", "b"}}, true},
+		{"const keyword", map[string]any{"const": "fixed"}, true},
+		{"format keyword", map[string]any{"format": "email"}, true},
+		{"properties keyword", map[string]any{"properties": map[string]any{}}, true},
+		{"items keyword", map[string]any{"items": map[string]any{}}, true},
+		{"minimum keyword", map[string]any{"minimum": 0}, true},
+		{"maximum keyword", map[string]any{"maximum": 100}, true},
+		{"minLength keyword", map[string]any{"minLength": 1}, true},
+		{"maxLength keyword", map[string]any{"maxLength": 255}, true},
+		{"pattern keyword", map[string]any{"pattern": "^[a-z]+$"}, true},
+		{"no schema keywords", map[string]any{"description": "not a schema"}, false},
+		{"empty map", map[string]any{}, false},
+		{"properties container", map[string]any{"name": map[string]any{"type": "string"}}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, looksLikeSchema(tt.obj))
+		})
+	}
+}
+
+// TestNormalizeExamples_Integration verifies that example normalization produces
+// schemas with Examples populated after compilation.
+func TestNormalizeExamples_Integration(t *testing.T) {
+	specBytes := []byte(`openapi: "3.0.0"
+info:
+  title: Example Test
+  version: "1.0"
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      responses:
+        "200":
+          description: A list of pets
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pet"
+components:
+  schemas:
+    Pet:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          example: "Fido"
+        age:
+          type: integer
+          example: 3
+        vaccinated:
+          type: boolean
+          example: true
+        weight:
+          type: number
+          example: 4.5
+        tag:
+          type: string`)
+
+	spec := parseInlineSpec(t, specBytes)
+
+	sc, err := New(specBytes, spec.Version)
+	require.NoError(t, err)
+
+	petRef := spec.Operations[0].Responses[200].Schema
+	compiled, err := sc.Compile(petRef.Pointer, petRef.Name, petRef.IsCircular)
+	require.NoError(t, err)
+
+	// Verify that the compiled schema's properties have Examples populated.
+	nameSchema := compiled.Schema.Properties["name"]
+	require.NotNil(t, nameSchema, "name property schema should exist")
+	assert.Equal(t, []any{"Fido"}, nameSchema.Examples, "name should have example 'Fido'")
+
+	ageSchema := compiled.Schema.Properties["age"]
+	require.NotNil(t, ageSchema, "age property schema should exist")
+	assert.Equal(t, []any{3}, ageSchema.Examples, "age should have example 3")
+
+	vaccinatedSchema := compiled.Schema.Properties["vaccinated"]
+	require.NotNil(t, vaccinatedSchema, "vaccinated property schema should exist")
+	assert.Equal(t, []any{true}, vaccinatedSchema.Examples, "vaccinated should have example true")
+
+	weightSchema := compiled.Schema.Properties["weight"]
+	require.NotNil(t, weightSchema, "weight property schema should exist")
+	assert.Equal(t, []any{4.5}, weightSchema.Examples, "weight should have example 4.5")
+
+	// tag has no example — should have nil Examples.
+	tagSchema := compiled.Schema.Properties["tag"]
+	require.NotNil(t, tagSchema, "tag property schema should exist")
+	assert.Nil(t, tagSchema.Examples, "tag should have no examples")
+}
+
 func TestPointer_PlusJSONContentType(t *testing.T) {
 	specBytes := []byte(`openapi: "3.0.0"
 info:

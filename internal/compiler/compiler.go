@@ -50,6 +50,10 @@ func New(specBytes []byte, version string) (*SchemaCompiler, error) {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidSpec, err)
 	}
 
+	// Normalize example → examples for all OpenAPI versions so the
+	// jsonschema compiler preserves spec-provided example values.
+	normalizeExamples(doc)
+
 	// Normalize OpenAPI 3.0 schemas to JSON Schema 2020-12.
 	if strings.HasPrefix(version, "3.0") {
 		normalizeOpenAPI30(doc)
@@ -84,6 +88,61 @@ func (sc *SchemaCompiler) Compile(pointer, name string, isCircular bool) (*model
 		IsCircular: isCircular,
 		Schema:     compiled,
 	}, nil
+}
+
+// normalizeExamples converts OpenAPI "example" (singular) to JSON Schema
+// "examples" (array) so the jsonschema compiler preserves example values.
+// This runs for all OpenAPI versions — even 3.1 spec authors commonly use
+// the "example" keyword since it is the established OpenAPI convention.
+//
+// A looksLikeSchema guard prevents the function from modifying container
+// maps (like "properties" or "components/schemas") whose keys could
+// coincidentally be "example".
+func normalizeExamples(v any) {
+	obj, ok := v.(map[string]any)
+	if !ok {
+		// Recurse into arrays.
+		if arr, ok := v.([]any); ok {
+			for _, item := range arr {
+				normalizeExamples(item)
+			}
+		}
+
+		return
+	}
+
+	// Only normalize maps that look like JSON Schema objects.
+	if looksLikeSchema(obj) {
+		if ex, hasExample := obj["example"]; hasExample {
+			if _, hasExamples := obj["examples"]; !hasExamples {
+				obj["examples"] = []any{ex}
+			}
+
+			delete(obj, "example")
+		}
+	}
+
+	// Recurse into all child values.
+	for _, child := range obj {
+		normalizeExamples(child)
+	}
+}
+
+// looksLikeSchema returns true if the map contains at least one key that
+// is a recognized JSON Schema keyword — indicating it is a schema object
+// rather than a container map (properties, components/schemas, paths, etc.).
+func looksLikeSchema(obj map[string]any) bool {
+	for _, key := range []string{
+		"type", "$ref", "allOf", "oneOf", "anyOf",
+		"enum", "const", "format", "properties", "items",
+		"minimum", "maximum", "minLength", "maxLength", "pattern",
+	} {
+		if _, ok := obj[key]; ok {
+			return true
+		}
+	}
+
+	return false
 }
 
 // normalizeOpenAPI30 recursively walks a generic YAML/JSON document and
