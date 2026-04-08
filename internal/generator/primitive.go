@@ -69,7 +69,7 @@ func NewPrimitiveGenerator(semantic *SemanticMapper) *PrimitiveGenerator {
 func (g *PrimitiveGenerator) Generate(schema *jsonschema.Schema, seed int64, fieldName string) (any, error) {
 	// 1. Const short-circuit.
 	if schema.Const != nil {
-		return *schema.Const, nil
+		return normalizeIntegerValue(*schema.Const, resolveType(schema)), nil
 	}
 
 	// 2. Enum short-circuit.
@@ -79,14 +79,23 @@ func (g *PrimitiveGenerator) Generate(schema *jsonschema.Schema, seed int64, fie
 
 	typ := resolveType(schema)
 
-	// 3. Semantic mapper — try before generic generation.
+	// 3. Example short-circuit — spec-provided example value.
+	if len(schema.Examples) > 0 {
+		example := schema.Examples[0]
+		if typeCompatible(example, typ) {
+			return normalizeIntegerValue(example, typ), nil
+		}
+		// Type mismatch: fall through to semantic/faker.
+	}
+
+	// 4. Semantic mapper — try before generic generation.
 	if fieldName != "" && g.semantic != nil {
 		if val, ok := g.trySemanticMatch(fieldName, typ, seed); ok {
 			return val, nil
 		}
 	}
 
-	// 4. Type-specific generation.
+	// 5. Type-specific generation.
 	switch typ {
 	case typeString:
 		return g.generateString(schema, seed), nil
@@ -419,6 +428,27 @@ func ratToFloat64(r *big.Rat) float64 {
 func ratToInt64(r *big.Rat) int64 {
 	// Use Num/Denom for integer division — truncates toward zero.
 	return r.Num().Int64() / r.Denom().Int64()
+}
+
+// normalizeIntegerValue converts int and float64 values to int64 when the
+// target schema type is "integer". This ensures consistent return types
+// across all integer generation paths (const, enum, example, faker).
+// YAML unmarshal produces Go int for integers; JSON unmarshal produces
+// float64. Both are normalized to int64 to match generateInteger's contract.
+// Non-integer types are returned unchanged.
+func normalizeIntegerValue(val any, typ string) any {
+	if typ != typeInteger {
+		return val
+	}
+
+	switch n := val.(type) {
+	case int:
+		return int64(n)
+	case float64:
+		return int64(n)
+	default:
+		return val
+	}
 }
 
 // absModLen returns a non-negative index derived from seed modulo length.

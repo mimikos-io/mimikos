@@ -29,62 +29,34 @@ var (
 	version   = "0.0.0-dev"
 	gitCommit = "unknown"
 	buildTime = "unknown"
+
+	// ErrInvalidLogLevel is returned when an unrecognized log level string is provided.
+	ErrInvalidLogLevel = errors.New("invalid log level")
 )
 
-// shortHashLen is the number of characters used for abbreviated git commit hashes.
-const shortHashLen = 7
+const (
+	// shortHashLen is the number of characters used for abbreviated git commit hashes.
+	shortHashLen = 7
 
-// resolveVersionFromBuildInfo populates version, gitCommit, and buildTime from
-// Go module info embedded by the toolchain. This covers the go install path
-// where ldflags are not injected.
-func resolveVersionFromBuildInfo() {
-	if version != "0.0.0-dev" {
-		return // ldflags were set (GoReleaser build), nothing to resolve.
-	}
+	// shutdownTimeout is the maximum time to wait for in-flight requests to
+	// complete during graceful shutdown.
+	shutdownTimeout = 5 * time.Second
 
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return
-	}
+	// defaultPort is the default server port.
+	defaultPort = 8080
 
-	// go install ...@v0.2.2 sets info.Main.Version to "v0.2.2".
-	if info.Main.Version != "" && info.Main.Version != "(devel)" {
-		version = info.Main.Version
-	}
+	// defaultMaxDepth is the default maximum recursion depth for data generation.
+	defaultMaxDepth = 3
 
-	for _, s := range info.Settings {
-		switch s.Key {
-		case "vcs.revision":
-			if len(s.Value) >= shortHashLen {
-				gitCommit = s.Value[:shortHashLen]
-			}
-		case "vcs.time":
-			buildTime = s.Value
-		}
-	}
-}
+	// defaultMaxResources is the default state store capacity for stateful mode.
+	defaultMaxResources = 10_000
 
-// ErrInvalidLogLevel is returned when an unrecognized log level string is provided.
-var ErrInvalidLogLevel = errors.New("invalid log level")
+	// maxPort is the maximum valid TCP port number.
+	maxPort = 65535
 
-// shutdownTimeout is the maximum time to wait for in-flight requests to
-// complete during graceful shutdown.
-const shutdownTimeout = 5 * time.Second
-
-// defaultPort is the default server port.
-const defaultPort = 8080
-
-// defaultMaxDepth is the default maximum recursion depth for data generation.
-const defaultMaxDepth = 3
-
-// defaultMaxResources is the default state store capacity for stateful mode.
-const defaultMaxResources = 10_000
-
-// maxPort is the maximum valid TCP port number.
-const maxPort = 65535
-
-// readHeaderTimeout is the maximum time to read request headers.
-const readHeaderTimeout = 10 * time.Second
+	// readHeaderTimeout is the maximum time to read request headers.
+	readHeaderTimeout = 10 * time.Second
+)
 
 func main() {
 	resolveVersionFromBuildInfo()
@@ -108,7 +80,17 @@ func run(args []string, out *os.File) int {
 
 		return 0
 	case "--version", "-v", "version":
-		_, _ = fmt.Fprintf(out, "🎭 mimikos %s (%s, %s)\n", version, gitCommit, buildTime)
+		output := "🎭 mimikos"
+
+		if version != "0.0.0-dev" {
+			output = fmt.Sprintf("%s %s", output, version)
+		}
+
+		if gitCommit != "unknown" && buildTime != "unknown" {
+			output = fmt.Sprintf("%s (%s, %s)", output, gitCommit, buildTime)
+		}
+
+		_, _ = fmt.Fprintf(out, "%s\n", output)
 
 		return 0
 	default:
@@ -302,12 +284,35 @@ func printStartupSummary(out *os.File, result *server.StartupResult, port int, s
 	_, _ = fmt.Fprintf(out, "Operations: %d endpoints classified\n", result.Operations)
 	_, _ = fmt.Fprintln(out)
 
-	for _, e := range result.Entries {
-		_, _ = fmt.Fprintf(out, "  %-7s %-30s → %-10s %s\n",
-			e.Method, e.PathPattern, e.BehaviorType, e.Confidence)
+	if len(result.Entries) > 0 {
+		// Compute column widths from entries and headers.
+		mw, pw, bw := len("METHOD"), len("PATH"), len("BEHAVIOR")
+		for _, e := range result.Entries {
+			if len(e.Method) > mw {
+				mw = len(e.Method)
+			}
+
+			if len(e.PathPattern) > pw {
+				pw = len(e.PathPattern)
+			}
+
+			if len(e.BehaviorType) > bw {
+				bw = len(e.BehaviorType)
+			}
+		}
+
+		rowFmt := fmt.Sprintf("  %%-%ds %%-%ds → %%-%ds %%s\n", mw, pw, bw)
+		colFmt := fmt.Sprintf("  %%-%ds %%-%ds %%-%ds %%s\n", mw, pw, bw)
+
+		_, _ = fmt.Fprintf(out, colFmt, "METHOD", "PATH", "BEHAVIOR", "CONFIDENCE")
+
+		for _, e := range result.Entries {
+			_, _ = fmt.Fprintf(out, rowFmt, e.Method, e.PathPattern, e.BehaviorType, e.Confidence)
+		}
+
+		_, _ = fmt.Fprintln(out)
 	}
 
-	_, _ = fmt.Fprintln(out)
 	_, _ = fmt.Fprintf(out, "Listening on :%d (%s mode, strict=%t)\n", port, result.Mode, strict)
 }
 
@@ -348,5 +353,34 @@ func parseLogLevel(s string) (slog.Level, error) {
 		return slog.LevelError, nil
 	default:
 		return 0, fmt.Errorf("%w: %q (must be debug, info, warn, or error)", ErrInvalidLogLevel, s)
+	}
+}
+
+// resolveVersionFromBuildInfo populates version, gitCommit, and buildTime from
+// Go module info embedded by the toolchain. This covers the go install path
+// where ldflags are not injected.
+func resolveVersionFromBuildInfo() {
+	if version != "0.0.0-dev" {
+		return // ldflags were set (GoReleaser build), nothing to resolve.
+	}
+
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+
+	if info.Main.Version != "" && info.Main.Version != "(devel)" {
+		version = info.Main.Version
+	}
+
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			if len(s.Value) >= shortHashLen {
+				gitCommit = s.Value[:shortHashLen]
+			}
+		case "vcs.time":
+			buildTime = s.Value
+		}
 	}
 }

@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/mimikos-io/mimikos/internal/model"
+	"github.com/mimikos-io/mimikos/internal/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -200,6 +202,89 @@ func TestParseStartFlags_MaxResourcesInvalid(t *testing.T) {
 			assert.Nil(t, cfg)
 		})
 	}
+}
+
+// --- Startup banner tests (22.4) ---
+
+func TestPrintStartupSummary_Headers(t *testing.T) {
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+
+	result := &server.StartupResult{
+		SpecTitle:   "Petstore",
+		SpecVersion: "3.0.0",
+		Operations:  2,
+		Mode:        model.ModeDeterministic,
+		Entries: []server.EntryInfo{
+			{Method: "GET", PathPattern: "/pets", BehaviorType: "list", Confidence: "high"},
+			{Method: "POST", PathPattern: "/pets", BehaviorType: "create", Confidence: "high"},
+		},
+	}
+
+	printStartupSummary(w, result, 8080, false)
+	require.NoError(t, w.Close())
+
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	output := string(buf[:n])
+
+	assert.Contains(t, output, "METHOD")
+	assert.Contains(t, output, "PATH")
+	assert.Contains(t, output, "BEHAVIOR")
+	assert.Contains(t, output, "CONFIDENCE")
+}
+
+func TestPrintStartupSummary_DynamicAlignment(t *testing.T) {
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+
+	result := &server.StartupResult{
+		SpecTitle:   "Test API",
+		SpecVersion: "3.1.0",
+		Operations:  2,
+		Mode:        model.ModeDeterministic,
+		Entries: []server.EntryInfo{
+			{Method: "GET", PathPattern: "/short", BehaviorType: "list", Confidence: "high"},
+			{Method: "DELETE", PathPattern: "/very/long/path/pattern/{id}", BehaviorType: "delete", Confidence: "moderate"},
+		},
+	}
+
+	printStartupSummary(w, result, 9090, true)
+	require.NoError(t, w.Close())
+
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	output := string(buf[:n])
+
+	// The long path should not be truncated.
+	assert.Contains(t, output, "/very/long/path/pattern/{id}")
+	// The "→" separators in header and rows should be aligned.
+	assert.Contains(t, output, "Listening on :9090")
+	assert.Contains(t, output, "strict=true")
+}
+
+func TestPrintStartupSummary_EmptyEntries(t *testing.T) {
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+
+	result := &server.StartupResult{
+		SpecTitle:   "Empty",
+		SpecVersion: "3.0.0",
+		Operations:  0,
+		Mode:        model.ModeDeterministic,
+		Entries:     nil,
+	}
+
+	printStartupSummary(w, result, 8080, false)
+	require.NoError(t, w.Close())
+
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	output := string(buf[:n])
+
+	assert.Contains(t, output, "Operations: 0 endpoints classified")
+	// No column headers when there are no entries.
+	assert.NotContains(t, output, "METHOD")
 }
 
 func TestParseLogLevel(t *testing.T) {

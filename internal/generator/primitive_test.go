@@ -548,6 +548,76 @@ func TestGenerateConst(t *testing.T) {
 	assert.Equal(t, "fixed-value", val)
 }
 
+func TestGenerateConstInteger_NormalizedToInt64(t *testing.T) {
+	t.Parallel()
+
+	g := NewPrimitiveGenerator(nil)
+
+	t.Run("int-from-YAML", func(t *testing.T) {
+		t.Parallel()
+
+		// YAML unmarshal produces Go int for integer constants.
+		constVal := any(42)
+		schema := &jsonschema.Schema{
+			Types: newTypes("integer"),
+			Const: &constVal,
+		}
+
+		val, err := g.Generate(schema, 99, "")
+		require.NoError(t, err)
+
+		_, ok := val.(int64)
+		assert.True(t, ok, "const integer from YAML should be normalized to int64, got %T", val)
+		assert.Equal(t, int64(42), val)
+	})
+
+	t.Run("float64-from-JSON", func(t *testing.T) {
+		t.Parallel()
+
+		// JSON unmarshal produces float64 for all numbers.
+		constVal := any(float64(7))
+		schema := &jsonschema.Schema{
+			Types: newTypes("integer"),
+			Const: &constVal,
+		}
+
+		val, err := g.Generate(schema, 99, "")
+		require.NoError(t, err)
+
+		_, ok := val.(int64)
+		assert.True(t, ok, "const integer from JSON should be normalized to int64, got %T", val)
+		assert.Equal(t, int64(7), val)
+	})
+
+	t.Run("int64-passthrough", func(t *testing.T) {
+		t.Parallel()
+
+		constVal := any(int64(99))
+		schema := &jsonschema.Schema{
+			Types: newTypes("integer"),
+			Const: &constVal,
+		}
+
+		val, err := g.Generate(schema, 99, "")
+		require.NoError(t, err)
+		assert.Equal(t, int64(99), val)
+	})
+
+	t.Run("string-const-unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		constVal := any("hello")
+		schema := &jsonschema.Schema{
+			Types: newTypes("string"),
+			Const: &constVal,
+		}
+
+		val, err := g.Generate(schema, 99, "")
+		require.NoError(t, err)
+		assert.Equal(t, "hello", val, "non-integer const should not be normalized")
+	})
+}
+
 // --- Type inference tests ---
 
 func TestGenerateInferStringFromMinLength(t *testing.T) {
@@ -859,4 +929,212 @@ func TestGenerateNullableInteger(t *testing.T) {
 
 	_, ok := val.(int64)
 	assert.True(t, ok, "nullable integer should generate int64, got %T", val)
+}
+
+// --- Example-aware generation tests (22.2) ---
+
+func TestGenerateExampleString(t *testing.T) {
+	t.Parallel()
+
+	g := NewPrimitiveGenerator(nil)
+	schema := &jsonschema.Schema{
+		Types:    newTypes("string"),
+		Examples: []any{"Fido"},
+	}
+
+	val, err := g.Generate(schema, 42, "")
+	require.NoError(t, err)
+	assert.Equal(t, "Fido", val)
+}
+
+func TestGenerateExampleInteger_NormalizedToInt64(t *testing.T) {
+	t.Parallel()
+
+	g := NewPrimitiveGenerator(nil)
+
+	t.Run("int-from-YAML", func(t *testing.T) {
+		t.Parallel()
+
+		// YAML unmarshal produces Go int for integers.
+		schema := &jsonschema.Schema{
+			Types:    newTypes("integer"),
+			Examples: []any{42},
+		}
+
+		val, err := g.Generate(schema, 99, "")
+		require.NoError(t, err)
+
+		_, ok := val.(int64)
+		assert.True(t, ok, "example integer from YAML should be normalized to int64, got %T", val)
+		assert.Equal(t, int64(42), val)
+	})
+
+	t.Run("float64-from-JSON", func(t *testing.T) {
+		t.Parallel()
+
+		schema := &jsonschema.Schema{
+			Types:    newTypes("integer"),
+			Examples: []any{float64(7)},
+		}
+
+		val, err := g.Generate(schema, 99, "")
+		require.NoError(t, err)
+
+		_, ok := val.(int64)
+		assert.True(t, ok, "example integer from JSON should be normalized to int64, got %T", val)
+		assert.Equal(t, int64(7), val)
+	})
+}
+
+func TestGenerateExampleNumber(t *testing.T) {
+	t.Parallel()
+
+	g := NewPrimitiveGenerator(nil)
+	schema := &jsonschema.Schema{
+		Types:    newTypes("number"),
+		Examples: []any{3.14},
+	}
+
+	val, err := g.Generate(schema, 99, "")
+	require.NoError(t, err)
+
+	n, ok := val.(float64)
+	require.True(t, ok, "expected float64, got %T", val)
+	assert.InDelta(t, 3.14, n, 0.001)
+}
+
+func TestGenerateExampleBoolean(t *testing.T) {
+	t.Parallel()
+
+	g := NewPrimitiveGenerator(nil)
+	schema := &jsonschema.Schema{
+		Types:    newTypes("boolean"),
+		Examples: []any{true},
+	}
+
+	val, err := g.Generate(schema, 99, "")
+	require.NoError(t, err)
+	assert.Equal(t, true, val)
+}
+
+func TestGenerateExampleTypeMismatch_FallsThrough(t *testing.T) {
+	t.Parallel()
+
+	g := NewPrimitiveGenerator(nil)
+	// Example is a string but schema type is integer — should fall through.
+	schema := &jsonschema.Schema{
+		Types:    newTypes("integer"),
+		Examples: []any{"hello"},
+	}
+
+	val, err := g.Generate(schema, 42, "")
+	require.NoError(t, err)
+
+	_, ok := val.(int64)
+	assert.True(t, ok, "type mismatch should fall through to faker, got %T", val)
+}
+
+func TestGenerateExampleBeatsSemanticMapper(t *testing.T) {
+	t.Parallel()
+
+	sm := NewSemanticMapper()
+	g := NewPrimitiveGenerator(sm)
+	// Field name "email" matches semantic mapper, but example should win.
+	schema := &jsonschema.Schema{
+		Types:    newTypes("string"),
+		Examples: []any{"custom@example.com"},
+	}
+
+	val, err := g.Generate(schema, 42, "email")
+	require.NoError(t, err)
+	assert.Equal(t, "custom@example.com", val, "example should take priority over semantic mapper")
+}
+
+func TestGenerateConstBeatsExample(t *testing.T) {
+	t.Parallel()
+
+	g := NewPrimitiveGenerator(nil)
+	constVal := any("immutable")
+	schema := &jsonschema.Schema{
+		Const:    &constVal,
+		Examples: []any{"ignored"},
+	}
+
+	val, err := g.Generate(schema, 42, "")
+	require.NoError(t, err)
+	assert.Equal(t, "immutable", val, "const should take priority over example")
+}
+
+func TestGenerateEnumBeatsExample(t *testing.T) {
+	t.Parallel()
+
+	g := NewPrimitiveGenerator(nil)
+	schema := &jsonschema.Schema{
+		Types:    newTypes("string"),
+		Enum:     newEnum("a", "b"),
+		Examples: []any{"ignored"},
+	}
+
+	val, err := g.Generate(schema, 42, "")
+	require.NoError(t, err)
+
+	s, ok := val.(string)
+	require.True(t, ok)
+	assert.Contains(t, []string{"a", "b"}, s, "enum should take priority over example")
+}
+
+func TestGenerateExampleEmptySlice_FallsThrough(t *testing.T) {
+	t.Parallel()
+
+	g := NewPrimitiveGenerator(nil)
+	schema := &jsonschema.Schema{
+		Types:    newTypes("string"),
+		Examples: []any{},
+	}
+
+	val, err := g.Generate(schema, 42, "")
+	require.NoError(t, err)
+
+	s, ok := val.(string)
+	require.True(t, ok)
+	assert.NotEmpty(t, s, "empty examples should fall through to faker")
+}
+
+func TestGenerateExampleNull_FallsThrough(t *testing.T) {
+	t.Parallel()
+
+	g := NewPrimitiveGenerator(nil)
+	// example: null on a non-nullable string field — nil is not type-compatible
+	// with any primitive type, so the example is skipped and faker generates a value.
+	schema := &jsonschema.Schema{
+		Types:    newTypes("string"),
+		Examples: []any{nil},
+	}
+
+	val, err := g.Generate(schema, 42, "")
+	require.NoError(t, err)
+
+	s, ok := val.(string)
+	require.True(t, ok, "null example should fall through to faker, got %T", val)
+	assert.NotEmpty(t, s, "faker should generate a non-empty string")
+}
+
+func TestGenerateExampleDeterminism(t *testing.T) {
+	t.Parallel()
+
+	g := NewPrimitiveGenerator(nil)
+	schema := &jsonschema.Schema{
+		Types:    newTypes("string"),
+		Examples: []any{"constant-value"},
+	}
+
+	// Same example regardless of seed — examples are constants.
+	v1, err := g.Generate(schema, 1, "")
+	require.NoError(t, err)
+
+	v2, err := g.Generate(schema, 999, "")
+	require.NoError(t, err)
+
+	assert.Equal(t, v1, v2, "example value should be constant regardless of seed")
+	assert.Equal(t, "constant-value", v1)
 }

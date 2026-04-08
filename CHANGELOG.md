@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-04-08
+
+### Added
+
+#### Example-Aware Response Generation
+- Property-level `example` values from OpenAPI specs are now used in response generation
+- Priority chain: const → enum → **example** → semantic mapper → faker — spec-author examples take precedence over heuristic field-name matching
+- Works across all primitive types (string, integer, number, boolean) and all OpenAPI versions (3.0, 3.1)
+- Type-safe: mismatched examples (e.g., string example on an integer field) fall through gracefully to faker
+- Deterministic: example values are constants, producing identical output regardless of request seed
+
+#### Startup Banner Polish
+- Endpoint table now includes column headers (METHOD, PATH, BEHAVIOR, CONFIDENCE)
+- Column widths computed dynamically from actual entries — no more truncated long paths
+
 ## [0.2.3] - 2026-04-07
 
 ### Fixed
