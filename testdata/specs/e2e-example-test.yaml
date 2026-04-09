@@ -37,6 +37,23 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Pet"
+  /adoptions/{adoptionId}:
+    get:
+      operationId: getAdoption
+      summary: Get an adoption record
+      parameters:
+        - name: adoptionId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: An adoption record with a nullable pet reference
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Adoption"
 components:
   schemas:
     Pet:
@@ -77,3 +94,37 @@ components:
         tag:
           type: string
           description: Arbitrary tag — no example, no semantic match, uses faker
+    Owner:
+      type: object
+      properties:
+        name:
+          type: string
+          example: "Alice Johnson"
+        phone:
+          type: string
+          example: "555-0123"
+    Adoption:
+      type: object
+      required:
+        - id
+        - pet
+      properties:
+        id:
+          type: integer
+          example: 42
+        pet:
+          # nullable $ref — the critical pattern. OpenAPI 3.0 nullable + $ref
+          # is normalized to anyOf: [{$ref: Pet}, {type: null}] by the compiler.
+          # Without nullable preference, seed-based selection hides Pet examples ~50%.
+          nullable: true
+          $ref: "#/components/schemas/Pet"
+        owner:
+          # Second nullable $ref — tests the pattern on a different schema.
+          nullable: true
+          $ref: "#/components/schemas/Owner"
+        notes:
+          # Inline nullable string (type + nullable, no $ref).
+          # Already handled by resolveComplexType — included to verify no regression.
+          type: string
+          nullable: true
+          example: "Friendly dog, good with children"

@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-04-09
+
+### Added
+
+#### Startup Version Check
+- Mimikos now checks for newer versions at startup via the GitHub Releases API
+- Non-blocking: runs concurrently with server startup and prints a notification only if the check completes in time
+- Shows both installation methods: `go install` command and GitHub releases download link
+- Silently skipped on network failures, timeouts, or dev builds — never delays startup
+
+### Changed
+
+#### Default Max Depth Increased From 3 to 10
+- The `--max-depth` default is now 10 (was 3), allowing nested objects and arrays inside list response items to generate fully
+- The previous default of 3 caused depth exhaustion on the common list-response pattern (`Wrapper → array → Item → nested object/array`), producing `null` objects and empty arrays at the fourth level
+- The depth guard exists for circular schemas — 10 levels is more than enough for real-world specs while still preventing infinite recursion
+
+### Fixed
+
+#### Nullable Properties No Longer Hide Example Values
+- Nullable properties (`nullable: true` + `$ref`, or `anyOf: [{$ref}, {type: "null"}]`) now always generate the non-null branch
+- Previously, seed-based branch selection picked null ~50% of the time, hiding all example values behind nulls on real production specs
+- Consistent with inline nullable types (`type: ["object", "null"]`) which already preferred non-null
+
 ## [0.3.0] - 2026-04-08
 
 ### Added

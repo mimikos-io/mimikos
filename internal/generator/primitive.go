@@ -4,14 +4,28 @@ import (
 	"errors"
 	"math"
 	"math/big"
+	"time"
 
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-// ErrUnsupportedType is returned when Generate is called with a schema whose
-// resolved type is not a primitive (object, array, or null).
-var ErrUnsupportedType = errors.New("unsupported schema type for primitive generation")
+var (
+	// ErrUnsupportedType is returned when Generate is called with a schema whose
+	// resolved type is not a primitive (object, array, or null).
+	ErrUnsupportedType = errors.New("unsupported schema type for primitive generation")
+
+	// recentDateStart and recentDateEnd define the range for generated date and
+	// date-time values. A rolling 3-year window relative to the current system
+	// year produces plausible-looking dates that stay current as time passes.
+	// Computed once at package init — deterministic within a process lifetime.
+	// Specs that need exact dates should use example values.
+	//
+	//nolint:gochecknoglobals // package-level values computed once at init from system clock
+	recentDateStart = time.Date(time.Now().Year()-2, 1, 1, 0, 0, 0, 0, time.UTC)
+	//nolint:gochecknoglobals
+	recentDateEnd = time.Date(time.Now().Year(), 12, 31, 23, 59, 59, 0, time.UTC)
+)
 
 // JSON Schema type name constants.
 const (
@@ -264,9 +278,9 @@ func generateStringFormat(format string, seed int64) (string, bool) {
 	case "uuid":
 		return faker.UUID(), true
 	case "date-time":
-		return faker.Date().Format("2006-01-02T15:04:05Z"), true
+		return faker.DateRange(recentDateStart, recentDateEnd).Format("2006-01-02T15:04:05Z"), true
 	case "date":
-		return faker.Date().Format("2006-01-02"), true
+		return faker.DateRange(recentDateStart, recentDateEnd).Format("2006-01-02"), true
 	case "uri", "uri-reference", "iri", "iri-reference":
 		return faker.URL(), true
 	case "hostname":

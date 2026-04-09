@@ -136,7 +136,10 @@ func defaultMappings() map[string]Func {
 	m["lon"] = func(f *gofakeit.Faker) any { return f.Longitude() }
 
 	// --- Time (datetime) ---
-	datetimeGen := func(f *gofakeit.Faker) any { return f.Date().Format("2006-01-02T15:04:05Z") }
+	datetimeGen := func(f *gofakeit.Faker) any {
+		return f.DateRange(recentDateStart, recentDateEnd).Format("2006-01-02T15:04:05Z")
+	}
+
 	for _, k := range []string{
 		"createdat", "updatedat", "deletedat", "timestamp", "datetime",
 		"startat", "endat", "expiresat", "modifiedat", "occurredat",
@@ -144,10 +147,15 @@ func defaultMappings() map[string]Func {
 		m[k] = datetimeGen
 	}
 
-	m["time"] = func(f *gofakeit.Faker) any { return f.Date().Format("15:04:05Z") }
+	m["time"] = func(f *gofakeit.Faker) any {
+		return f.DateRange(recentDateStart, recentDateEnd).Format("15:04:05Z")
+	}
 
 	// --- Time (date only) ---
-	dateGen := func(f *gofakeit.Faker) any { return f.Date().Format("2006-01-02") }
+	dateGen := func(f *gofakeit.Faker) any {
+		return f.DateRange(recentDateStart, recentDateEnd).Format("2006-01-02")
+	}
+
 	for _, k := range []string{"date", "birthday", "dob", "duedate", "startdate", "enddate"} {
 		m[k] = dateGen
 	}

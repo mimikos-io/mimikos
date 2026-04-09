@@ -130,3 +130,55 @@ func TestExampleE2E_StrictMode_PassesValidation(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
 		"strict mode: response with example values should pass schema validation")
 }
+
+// --- Nullable Preference E2E Tests (Task 37) ---
+
+func TestExampleE2E_NullableRef_ShowsExamples(t *testing.T) {
+	skipIfShort(t)
+
+	srv := buildExampleTestServer(t)
+	defer srv.Close()
+
+	adoption := getJSONObject(t, srv, "/adoptions/1")
+
+	// "pet" is nullable: true + $ref: Pet. Without nullable preference, this
+	// would be null ~50% of the time. With the fix, it should always be the
+	// Pet object with example values.
+	pet, ok := adoption["pet"].(map[string]any)
+	require.True(t, ok, "pet should be an object, not null — got %T: %v", adoption["pet"], adoption["pet"])
+	assert.Equal(t, "Fido", pet["name"], "nullable $ref pet.name should use example value")
+	assert.Equal(t, "dog", pet["species"], "nullable $ref pet.species should use example value")
+
+	// "owner" is also nullable $ref — should be non-null.
+	owner, ok := adoption["owner"].(map[string]any)
+	require.True(t, ok, "owner should be an object, not null — got %T: %v", adoption["owner"], adoption["owner"])
+	assert.Equal(t, "Alice Johnson", owner["name"], "nullable $ref owner.name should use example value")
+	assert.Equal(t, "555-0123", owner["phone"], "nullable $ref owner.phone should use example value")
+}
+
+func TestExampleE2E_NullableRef_Determinism(t *testing.T) {
+	skipIfShort(t)
+
+	srv := buildExampleTestServer(t)
+	defer srv.Close()
+
+	adoption1 := getJSONObject(t, srv, "/adoptions/1")
+	adoption2 := getJSONObject(t, srv, "/adoptions/1")
+
+	assert.Equal(t, adoption1, adoption2, "nullable ref responses should be deterministic")
+}
+
+func TestExampleE2E_NullableRef_StrictMode(t *testing.T) {
+	skipIfShort(t)
+
+	// Server is built with Strict: true. Nullable preference must produce
+	// schema-valid responses (the non-null branch is always a valid anyOf option).
+	srv := buildExampleTestServer(t)
+	defer srv.Close()
+
+	resp := doRequest(t, srv, http.MethodGet, "/adoptions/1")
+	defer closeBody(t, resp)
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode,
+		"strict mode: nullable ref response should pass schema validation")
+}

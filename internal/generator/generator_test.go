@@ -1270,3 +1270,275 @@ func TestGenerateAdditionalPropertiesTrue(t *testing.T) {
 	assert.Empty(t, m,
 		"additionalProperties: true with no schema → empty object (nothing to generate)")
 }
+
+// --- Nullable preference tests (Task 37) ---
+
+func TestIsNullBranch(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		schema *jsonschema.Schema
+		want   bool
+	}{
+		{
+			name:   "null type",
+			schema: &jsonschema.Schema{Types: newTypes("null")},
+			want:   true,
+		},
+		{
+			name:   "string type",
+			schema: &jsonschema.Schema{Types: newTypes("string")},
+			want:   false,
+		},
+		{
+			name:   "object type",
+			schema: &jsonschema.Schema{Types: newTypes("object")},
+			want:   false,
+		},
+		{
+			name:   "nullable inline (object+null) is not a null branch",
+			schema: &jsonschema.Schema{Types: newTypes("object", "null")},
+			want:   false,
+		},
+		{
+			name:   "nil schema",
+			schema: nil,
+			want:   false,
+		},
+		{
+			name:   "no types",
+			schema: &jsonschema.Schema{},
+			want:   false,
+		},
+		{
+			name: "$ref to null type",
+			schema: &jsonschema.Schema{
+				Ref: &jsonschema.Schema{Types: newTypes("null")},
+			},
+			want: true,
+		},
+		{
+			name: "$ref to non-null type",
+			schema: &jsonschema.Schema{
+				Ref: &jsonschema.Schema{Types: newTypes("string")},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, isNullBranch(tt.schema))
+		})
+	}
+}
+
+func TestNonNullBranches(t *testing.T) {
+	t.Parallel()
+
+	nullSchema := &jsonschema.Schema{Types: newTypes("null")}
+	stringSchema := &jsonschema.Schema{Types: newTypes("string")}
+	intSchema := &jsonschema.Schema{Types: newTypes("integer")}
+
+	tests := []struct {
+		name    string
+		schemas []*jsonschema.Schema
+		wantLen int
+		wantNil bool
+	}{
+		{
+			name:    "mixed: one non-null, one null",
+			schemas: []*jsonschema.Schema{stringSchema, nullSchema},
+			wantLen: 1,
+		},
+		{
+			name:    "all null",
+			schemas: []*jsonschema.Schema{nullSchema, nullSchema},
+			wantNil: true,
+		},
+		{
+			name:    "no null branches",
+			schemas: []*jsonschema.Schema{stringSchema, intSchema},
+			wantLen: 2,
+		},
+		{
+			name:    "single null",
+			schemas: []*jsonschema.Schema{nullSchema},
+			wantNil: true,
+		},
+		{
+			name:    "single non-null",
+			schemas: []*jsonschema.Schema{stringSchema},
+			wantLen: 1,
+		},
+		{
+			name:    "three-way: two non-null, one null",
+			schemas: []*jsonschema.Schema{stringSchema, intSchema, nullSchema},
+			wantLen: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := nonNullBranches(tt.schemas)
+			if tt.wantNil {
+				assert.Nil(t, result)
+			} else {
+				require.Len(t, result, tt.wantLen)
+
+				for _, s := range result {
+					assert.False(t, isNullBranch(s), "filtered result should not contain null branches")
+				}
+			}
+		})
+	}
+}
+
+func TestGenerateBranch_PrefersNonNull(t *testing.T) {
+	t.Parallel()
+
+	g := NewDataGenerator(nil, 0, nil)
+
+	// anyOf: [{type: object, properties: {name: string}}, {type: null}]
+	schema := &jsonschema.Schema{
+		AnyOf: []*jsonschema.Schema{
+			objectSchema(map[string]*jsonschema.Schema{
+				"name": {Types: newTypes("string")},
+			}),
+			{Types: newTypes("null")},
+		},
+	}
+
+	// Try multiple seeds — should always generate the object, never null.
+	for _, seed := range []int64{1, 2, 3, 42, 100, 999, 12345} {
+		val, err := g.Generate(schema, seed)
+		require.NoError(t, err, "seed=%d", seed)
+
+		m, ok := val.(map[string]any)
+		require.True(t, ok, "seed=%d: expected object, got %T (%v)", seed, val, val)
+		assert.Contains(t, m, "name", "seed=%d", seed)
+	}
+}
+
+func TestGenerateBranch_OneOfPrefersNonNull(t *testing.T) {
+	t.Parallel()
+
+	g := NewDataGenerator(nil, 0, nil)
+
+	// oneOf: [{type: object, properties: {name: string}}, {type: null}]
+	// This is the native OpenAPI 3.1 nullable pattern (not compiler-normalized).
+	// Must behave identically to the anyOf variant tested above.
+	schema := &jsonschema.Schema{
+		OneOf: []*jsonschema.Schema{
+			objectSchema(map[string]*jsonschema.Schema{
+				"name": {Types: newTypes("string")},
+			}),
+			{Types: newTypes("null")},
+		},
+	}
+
+	for _, seed := range []int64{1, 2, 3, 42, 100, 999} {
+		val, err := g.Generate(schema, seed)
+		require.NoError(t, err, "seed=%d", seed)
+
+		m, ok := val.(map[string]any)
+		require.True(t, ok, "seed=%d: expected object, got %T (%v)", seed, val, val)
+		assert.Contains(t, m, "name", "seed=%d", seed)
+	}
+}
+
+func TestGenerateBranch_PureNull(t *testing.T) {
+	t.Parallel()
+
+	g := NewDataGenerator(nil, 0, nil)
+
+	// anyOf with only null branches — must still generate null.
+	schema := &jsonschema.Schema{
+		AnyOf: []*jsonschema.Schema{
+			{Types: newTypes("null")},
+		},
+	}
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+	assert.Nil(t, val, "anyOf with only null branches should produce nil")
+}
+
+func TestGenerateBranch_NoNullUnchanged(t *testing.T) {
+	t.Parallel()
+
+	g := NewDataGenerator(nil, 0, nil)
+
+	// anyOf with two non-null branches — seed-based selection should work normally.
+	branchA := objectSchema(map[string]*jsonschema.Schema{
+		"type_a": {Types: newTypes("string")},
+	})
+	branchB := objectSchema(map[string]*jsonschema.Schema{
+		"type_b": {Types: newTypes("string")},
+	})
+
+	schema := &jsonschema.Schema{
+		AnyOf: []*jsonschema.Schema{branchA, branchB},
+	}
+
+	// Over multiple seeds, both branches should appear.
+	sawA, sawB := false, false
+
+	for seed := int64(0); seed < 20; seed++ {
+		val, err := g.Generate(schema, seed)
+		require.NoError(t, err)
+
+		m, ok := val.(map[string]any)
+		require.True(t, ok)
+
+		if _, has := m["type_a"]; has {
+			sawA = true
+		}
+
+		if _, has := m["type_b"]; has {
+			sawB = true
+		}
+	}
+
+	assert.True(t, sawA && sawB,
+		"both branches should be reachable when no null branch exists (sawA=%v, sawB=%v)", sawA, sawB)
+}
+
+func TestGenerateBranch_ThreeWayNullable(t *testing.T) {
+	t.Parallel()
+
+	g := NewDataGenerator(nil, 0, nil)
+
+	// anyOf: [string, integer, null] → should never pick null, seed picks between string/integer.
+	schema := &jsonschema.Schema{
+		AnyOf: []*jsonschema.Schema{
+			{Types: newTypes("string")},
+			{Types: newTypes("integer")},
+			{Types: newTypes("null")},
+		},
+	}
+
+	sawString, sawInt := false, false
+
+	for seed := int64(0); seed < 20; seed++ {
+		val, err := g.Generate(schema, seed)
+		require.NoError(t, err)
+		require.NotNil(t, val, "seed=%d: should never generate null", seed)
+
+		switch val.(type) {
+		case string:
+			sawString = true
+		case int64:
+			sawInt = true
+		default:
+			t.Fatalf("seed=%d: unexpected type %T", seed, val)
+		}
+	}
+
+	assert.True(t, sawString && sawInt,
+		"both non-null branches should be reachable (sawString=%v, sawInt=%v)", sawString, sawInt)
+}

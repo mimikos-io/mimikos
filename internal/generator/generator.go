@@ -24,61 +24,74 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-// defaultMaxDepth is the maximum recursion depth for nested object/array
-// generation. Three levels covers the vast majority of real API schemas.
-const defaultMaxDepth = 3
+const (
+	// defaultMaxDepth is the maximum recursion depth for nested object/array
+	// generation. Three levels covers the vast majority of real API schemas.
+	defaultMaxDepth = 3
 
-// defaultArrayLen is the number of items generated for arrays when no
-// minItems/maxItems constraints are specified.
-const defaultArrayLen = 3
+	// defaultArrayLen is the number of items generated for arrays when no
+	// minItems/maxItems constraints are specified.
+	defaultArrayLen = 3
 
-// mapEntryCount is the number of entries generated for map-type schemas
-// (object with additionalProperties but no defined properties).
-const mapEntryCount = 3
+	// mapEntryCount is the number of entries generated for map-type schemas
+	// (object with additionalProperties but no defined properties).
+	mapEntryCount = 3
 
-// mapKeyLen is the length of generated map keys for map-type schemas.
-const mapKeyLen = 6
+	// mapKeyLen is the length of generated map keys for map-type schemas.
+	mapKeyLen = 6
 
-// maxUniqueRetries caps the number of retry attempts per item when
-// uniqueItems is required and a duplicate is generated.
-const maxUniqueRetries = 10
+	// maxUniqueRetries caps the number of retry attempts per item when
+	// uniqueItems is required and a duplicate is generated.
+	maxUniqueRetries = 10
 
-// maxRecursion is a hard safety limit on total call depth (structural +
-// composition) to prevent stack overflow on circular allOf/oneOf/anyOf
-// chains where no intermediate object/array increments structural depth.
-const maxRecursion = 64
+	// maxRecursion is a hard safety limit on total call depth (structural +
+	// composition) to prevent stack overflow on circular allOf/oneOf/anyOf
+	// chains where no intermediate object/array increments structural depth.
+	maxRecursion = 64
 
-// DataGenerator produces deterministic, schema-complete response data by
-// walking a JSON Schema tree. It delegates primitive leaf generation to
-// [PrimitiveGenerator] and handles object properties, array items,
-// polymorphism (allOf/oneOf/anyOf), and circular reference termination.
-//
-// Two depth counters prevent infinite recursion:
-//
-//   - depth (structural): incremented only by object properties and array
-//     items. Composition keywords (allOf/oneOf/anyOf) are depth-neutral —
-//     they describe what an object is made of, not deeper nesting. This
-//     allows specs with deep allOf inheritance chains (e.g., TaskResponse →
-//     TaskBase → TaskCompact → AsanaResource) to fully resolve without
-//     hitting the depth limit. Objects at the depth limit produce nil
-//     (JSON null). Arrays at the depth limit produce empty slices (JSON []).
-//
-//   - recurse (absolute): incremented on every call into generate,
-//     regardless of kind. Acts as a hard safety net (maxRecursion = 64)
-//     against stack overflow from circular composition chains
-//     (e.g., A.allOf → B, B.allOf → A) that never pass through an
-//     object or array to increment structural depth.
-//
-// All outputs are deterministic: identical schemas with identical seeds
-// always produce identical data structures.
-type DataGenerator struct {
-	primitive *PrimitiveGenerator
-	maxDepth  int
-	logger    *slog.Logger
-}
+	// Warning messages for depth and recursion termination. Extracted to constants
+	// to stay within the line-length limit at the call site.
+	warnCircularSchema = "circular schema detected — field generated as null to prevent " +
+		"infinite recursion; check spec for circular $ref chains"
+	warnDepthObject = "schema depth limit reached — object field generated as null; " +
+		"increase --max-depth to generate nested objects"
+	warnDepthArray = "schema depth limit reached — array field generated as empty; " +
+		"increase --max-depth to generate nested arrays"
+)
 
-// discardHandler is a slog.Handler that discards all log output.
-type discardHandler struct{}
+type (
+	// DataGenerator produces deterministic, schema-complete response data by
+	// walking a JSON Schema tree. It delegates primitive leaf generation to
+	// [PrimitiveGenerator] and handles object properties, array items,
+	// polymorphism (allOf/oneOf/anyOf), and circular reference termination.
+	//
+	// Two depth counters prevent infinite recursion:
+	//
+	//   - depth (structural): incremented only by object properties and array
+	//     items. Composition keywords (allOf/oneOf/anyOf) are depth-neutral —
+	//     they describe what an object is made of, not deeper nesting. This
+	//     allows specs with deep allOf inheritance chains (e.g., TaskResponse →
+	//     TaskBase → TaskCompact → AsanaResource) to fully resolve without
+	//     hitting the depth limit. Objects at the depth limit produce nil
+	//     (JSON null). Arrays at the depth limit produce empty slices (JSON []).
+	//
+	//   - recurse (absolute): incremented on every call into generate,
+	//     regardless of kind. Acts as a hard safety net (maxRecursion = 64)
+	//     against stack overflow from circular composition chains
+	//     (e.g., A.allOf → B, B.allOf → A) that never pass through an
+	//     object or array to increment structural depth.
+	//
+	// All outputs are deterministic: identical schemas with identical seeds
+	// always produce identical data structures.
+	DataGenerator struct {
+		primitive *PrimitiveGenerator
+		maxDepth  int
+		logger    *slog.Logger
+	}
+
+	// discardHandler is a slog.Handler that discards all log output.
+	discardHandler struct{}
+)
 
 func (discardHandler) Enabled(context.Context, slog.Level) bool  { return false }
 func (discardHandler) Handle(context.Context, slog.Record) error { return nil }
@@ -129,9 +142,7 @@ func (g *DataGenerator) generate(
 	// Logged at Warn because hitting this limit signals a likely spec defect
 	// (purely circular composition chain), not normal depth management.
 	if recurse >= maxRecursion {
-		g.logger.Warn("recursion limit reached — possible circular schema",
-			"recurse", recurse, "field", fieldName,
-			"schema", schemaID(schema))
+		g.logger.Warn(warnCircularSchema, "field", fieldName, "recurse", recurse, "schema", schemaID(schema))
 
 		return nil, nil //nolint:nilnil // recursion limit termination
 	}
@@ -170,8 +181,8 @@ func (g *DataGenerator) generate(
 	switch typ {
 	case typeObject:
 		if depth >= g.maxDepth {
-			g.logger.Debug("depth termination: object → null",
-				"depth", depth, "maxDepth", g.maxDepth, "field", fieldName,
+			g.logger.Warn(warnDepthObject,
+				"field", fieldName, "depth", depth, "maxDepth", g.maxDepth,
 				"schema", schemaID(schema))
 
 			return nil, nil //nolint:nilnil // depth termination — nil is the documented sentinel
@@ -180,8 +191,8 @@ func (g *DataGenerator) generate(
 		return g.generateObject(schema, seed, depth, recurse)
 	case typeArray:
 		if depth >= g.maxDepth {
-			g.logger.Debug("depth termination: array → []",
-				"depth", depth, "maxDepth", g.maxDepth, "field", fieldName,
+			g.logger.Warn(warnDepthArray,
+				"field", fieldName, "depth", depth, "maxDepth", g.maxDepth,
 				"schema", schemaID(schema))
 
 			return []any{}, nil // depth termination — empty array
@@ -462,6 +473,10 @@ func (g *DataGenerator) generateAllOf(schema *jsonschema.Schema, seed int64, dep
 }
 
 // generateBranch selects one branch deterministically from oneOf or anyOf.
+// Null-typed branches are filtered out when non-null alternatives exist,
+// consistent with resolveComplexType which already skips "null" in inline
+// type arrays (e.g., Types: ["object", "null"] → generates object).
+// A mock server showing data is always more useful than showing null.
 func (g *DataGenerator) generateBranch(
 	schemas []*jsonschema.Schema, seed int64, fieldName string, depth int, recurse int,
 ) (any, error) {
@@ -469,9 +484,51 @@ func (g *DataGenerator) generateBranch(
 		return nil, nil //nolint:nilnil // empty oneOf/anyOf
 	}
 
+	// Prefer non-null branches. Only activates when at least one null
+	// branch is present and at least one non-null branch exists.
+	if filtered := nonNullBranches(schemas); len(filtered) > 0 {
+		schemas = filtered
+	}
+
 	idx := absModLen(seed, len(schemas))
 
 	return g.generate(schemas[idx], seed, fieldName, depth, recurse+1)
+}
+
+// isNullBranch returns true if the schema resolves to exclusively the null
+// type. Follows $ref transparently. Returns false for nil schemas and schemas
+// without an explicit type (which default to string/object via inference).
+func isNullBranch(schema *jsonschema.Schema) bool {
+	if schema == nil {
+		return false
+	}
+
+	if schema.Ref != nil {
+		return isNullBranch(schema.Ref)
+	}
+
+	if schema.Types == nil {
+		return false
+	}
+
+	types := schema.Types.ToStrings()
+
+	return len(types) == 1 && types[0] == typeNull
+}
+
+// nonNullBranches returns the subset of schemas that are not null-typed.
+// Returns nil if all branches are null-typed, allowing the caller to fall
+// back to the original list.
+func nonNullBranches(schemas []*jsonschema.Schema) []*jsonschema.Schema {
+	var result []*jsonschema.Schema
+
+	for _, s := range schemas {
+		if !isNullBranch(s) {
+			result = append(result, s)
+		}
+	}
+
+	return result
 }
 
 // mergeMaps copies all entries from src into dst (last-write-wins).

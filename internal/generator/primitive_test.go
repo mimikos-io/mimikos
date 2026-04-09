@@ -62,8 +62,14 @@ func TestGenerateStringFormats(t *testing.T) {
 			format: "date-time",
 			check: func(t *testing.T, val string) {
 				t.Helper()
-				_, err := time.Parse(time.RFC3339, val)
-				assert.NoError(t, err, "date-time must parse as RFC 3339")
+
+				parsed, err := time.Parse(time.RFC3339, val)
+				require.NoError(t, err, "date-time must parse as RFC 3339")
+
+				assert.False(t, parsed.Before(recentDateStart),
+					"date-time %s must not be before %s", val, recentDateStart.Format(time.RFC3339))
+				assert.False(t, parsed.After(recentDateEnd),
+					"date-time %s must not be after %s", val, recentDateEnd.Format(time.RFC3339))
 			},
 		},
 		{
@@ -71,8 +77,14 @@ func TestGenerateStringFormats(t *testing.T) {
 			format: "date",
 			check: func(t *testing.T, val string) {
 				t.Helper()
-				_, err := time.Parse("2006-01-02", val)
-				assert.NoError(t, err, "date must parse as YYYY-MM-DD")
+
+				parsed, err := time.Parse("2006-01-02", val)
+				require.NoError(t, err, "date must parse as YYYY-MM-DD")
+
+				assert.False(t, parsed.Before(recentDateStart),
+					"date %s must not be before %s", val, recentDateStart.Format("2006-01-02"))
+				assert.False(t, parsed.After(recentDateEnd),
+					"date %s must not be after %s", val, recentDateEnd.Format("2006-01-02"))
 			},
 		},
 		{
@@ -1117,6 +1129,58 @@ func TestGenerateExampleNull_FallsThrough(t *testing.T) {
 	s, ok := val.(string)
 	require.True(t, ok, "null example should fall through to faker, got %T", val)
 	assert.NotEmpty(t, s, "faker should generate a non-empty string")
+}
+
+func TestGenerateDateTimeRecentRange(t *testing.T) {
+	t.Parallel()
+
+	g := NewPrimitiveGenerator(nil)
+
+	// Test across many seeds to verify all generated dates fall within the
+	// recent range. Unconstrained faker.Date() would produce dates across
+	// decades (1920s–2090s), so any seed producing an out-of-range date
+	// catches the regression.
+	seeds := []int64{0, 1, 42, 100, 999, 12345, -1, -99999, 1<<32 - 1}
+
+	for _, seed := range seeds {
+		dtSchema := &jsonschema.Schema{
+			Types:  newTypes("string"),
+			Format: newFormat("date-time"),
+		}
+
+		val, err := g.Generate(dtSchema, seed, "")
+		require.NoError(t, err)
+
+		s, ok := val.(string)
+		require.True(t, ok)
+
+		parsed, err := time.Parse(time.RFC3339, s)
+		require.NoError(t, err, "seed %d: %s", seed, s)
+
+		assert.False(t, parsed.Before(recentDateStart),
+			"seed %d: %s is before %s", seed, s, recentDateStart.Format(time.RFC3339))
+		assert.False(t, parsed.After(recentDateEnd),
+			"seed %d: %s is after %s", seed, s, recentDateEnd.Format(time.RFC3339))
+
+		dSchema := &jsonschema.Schema{
+			Types:  newTypes("string"),
+			Format: newFormat("date"),
+		}
+
+		val, err = g.Generate(dSchema, seed, "")
+		require.NoError(t, err)
+
+		s, ok = val.(string)
+		require.True(t, ok)
+
+		parsed, err = time.Parse("2006-01-02", s)
+		require.NoError(t, err, "seed %d: %s", seed, s)
+
+		assert.False(t, parsed.Before(recentDateStart),
+			"seed %d: %s is before %s", seed, s, recentDateStart.Format("2006-01-02"))
+		assert.False(t, parsed.After(recentDateEnd),
+			"seed %d: %s is after %s", seed, s, recentDateEnd.Format("2006-01-02"))
+	}
 }
 
 func TestGenerateExampleDeterminism(t *testing.T) {
