@@ -59,7 +59,8 @@ func (p *LibopenAPIParser) Parse(ctx context.Context, doc libopenapi.Document) (
 	}
 
 	if buildErr != nil {
-		p.logger.Warn("spec build produced warnings", "error", buildErr)
+		p.logger.Warn("OpenAPI spec parsed with warnings — some schema definitions may not resolve correctly",
+			"error", buildErr)
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -230,7 +231,7 @@ func (p *LibopenAPIParser) extractResponses(
 		for codePair := op.Responses.Codes.Oldest(); codePair != nil; codePair = codePair.Next() {
 			code, err := strconv.Atoi(codePair.Key)
 			if err != nil {
-				p.logger.Warn("skipping non-integer response code",
+				p.logger.Warn("non-numeric response code ignored — only integer status codes (e.g., 200, 404) are supported",
 					"code", codePair.Key,
 					"operation", op.OperationId,
 				)
@@ -295,7 +296,8 @@ func (p *LibopenAPIParser) resolveSchemaRef(
 
 	schema := proxy.Schema()
 	if schema == nil {
-		p.logger.Warn("schema proxy resolved to nil", "ref", proxy.GetReference())
+		p.logger.Warn("$ref target resolved to empty schema — referenced definition may be missing or malformed in spec",
+			"ref", proxy.GetReference())
 
 		return nil
 	}

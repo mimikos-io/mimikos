@@ -26,7 +26,7 @@ import (
 //
 //nolint:gochecknoglobals // ldflags-injected build metadata
 var (
-	version   = "0.0.0-dev"
+	version   = devVersion
 	gitCommit = "unknown"
 	buildTime = "unknown"
 
@@ -46,7 +46,7 @@ const (
 	defaultPort = 8080
 
 	// defaultMaxDepth is the default maximum recursion depth for data generation.
-	defaultMaxDepth = 3
+	defaultMaxDepth = 10
 
 	// defaultMaxResources is the default state store capacity for stateful mode.
 	defaultMaxResources = 10_000
@@ -56,6 +56,10 @@ const (
 
 	// readHeaderTimeout is the maximum time to read request headers.
 	readHeaderTimeout = 10 * time.Second
+
+	// updateCheckTimeout is the maximum time to wait for the GitHub Releases
+	// API when checking for a newer version at startup.
+	updateCheckTimeout = 2 * time.Second
 )
 
 func main() {
@@ -190,6 +194,9 @@ func runStart(args []string, out *os.File) int {
 
 	logger := slog.New(slog.NewTextHandler(out, &slog.HandlerOptions{Level: cfg.level}))
 
+	// Start version check in background (non-blocking).
+	updateCh := startUpdateCheck()
+
 	// Read spec file.
 	specBytes, err := os.ReadFile(cfg.specPath)
 	if err != nil {
@@ -229,6 +236,9 @@ func runStart(args []string, out *os.File) int {
 
 	// Print startup summary after successful bind.
 	printStartupSummary(out, result, cfg.port, cfg.strict)
+
+	// Print update notification if the check completed during startup.
+	printUpdateNotification(out, updateCh)
 
 	// Start HTTP server on the pre-bound listener.
 	srv := &http.Server{
@@ -314,6 +324,37 @@ func printStartupSummary(out *os.File, result *server.StartupResult, port int, s
 	}
 
 	_, _ = fmt.Fprintf(out, "Listening on :%d (%s mode, strict=%t)\n", port, result.Mode, strict)
+}
+
+// startUpdateCheck launches a background goroutine that checks the GitHub
+// Releases API for a newer mimikos version. Returns a buffered channel that
+// receives the result (or nil on failure/skip). The goroutine uses an
+// independent context so it completes even if the main context is cancelled.
+func startUpdateCheck() <-chan *updateResult {
+	ch := make(chan *updateResult, 1)
+
+	go func() {
+		checkCtx, cancel := context.WithTimeout(context.Background(), updateCheckTimeout)
+		defer cancel()
+
+		ch <- checkLatestVersion(checkCtx, version, "")
+	}()
+
+	return ch
+}
+
+// printUpdateNotification does a non-blocking read on the update channel
+// and prints a notification if a newer version is available. If the check
+// is still in flight, it silently moves on — never blocks startup.
+func printUpdateNotification(out *os.File, ch <-chan *updateResult) {
+	select {
+	case r := <-ch:
+		if r != nil && r.UpdateAvailable {
+			_, _ = fmt.Fprint(out, formatUpdateNotification(r.CurrentVersion, r.LatestVersion))
+		}
+	default:
+		// Check still in flight — don't block startup.
+	}
 }
 
 // printUsage writes the CLI usage message.
