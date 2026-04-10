@@ -107,15 +107,16 @@ func buildEntry(
 	}
 
 	return model.BehaviorEntry{
-		OperationID:     op.OperationID,
-		Method:          op.Method,
-		PathPattern:     op.Path,
-		Type:            result.Type,
-		SuccessCode:     successCode,
-		RequestSchema:   requestSchema,
-		ResponseSchemas: responseSchemas,
-		Source:          model.SourceHeuristic,
-		Confidence:      result.Confidence,
+		OperationID:      op.OperationID,
+		Method:           op.Method,
+		PathPattern:      op.Path,
+		Type:             result.Type,
+		SuccessCode:      successCode,
+		RequestSchema:    requestSchema,
+		ResponseSchemas:  responseSchemas,
+		ResponseExamples: buildResponseExamples(op),
+		Source:           model.SourceHeuristic,
+		Confidence:       result.Confidence,
 	}
 }
 
@@ -246,6 +247,36 @@ func buildResponseSchemas(
 	}
 
 	return schemas
+}
+
+// buildResponseExamples collects media-type examples from an operation's
+// responses into a map keyed by status code (0 for default). Returns nil
+// if no responses have examples (zero allocation).
+func buildResponseExamples(op parser.Operation) map[int]any {
+	var examples map[int]any
+
+	for code, resp := range op.Responses {
+		if resp == nil || resp.Example == nil {
+			continue
+		}
+
+		if examples == nil {
+			examples = make(map[int]any)
+		}
+
+		examples[code] = resp.Example
+	}
+
+	// Default response example at key 0.
+	if op.DefaultResponse != nil && op.DefaultResponse.Example != nil {
+		if examples == nil {
+			examples = make(map[int]any)
+		}
+
+		examples[0] = op.DefaultResponse.Example
+	}
+
+	return examples
 }
 
 // compileSchema compiles a single SchemaRef, logging a warning on failure.

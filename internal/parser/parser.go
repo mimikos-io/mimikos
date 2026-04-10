@@ -200,8 +200,8 @@ func (p *LibopenAPIParser) extractRequestBody(
 		return nil
 	}
 
-	schemaProxy, contentType := findJSONMediaTypeSchema(op.RequestBody.Content)
-	if schemaProxy == nil {
+	mt, contentType := findJSONMediaType(op.RequestBody.Content)
+	if mt == nil || mt.Schema == nil {
 		return nil
 	}
 
@@ -210,7 +210,7 @@ func (p *LibopenAPIParser) extractRequestBody(
 
 	return &RequestBody{
 		Required: required,
-		Schema:   p.resolveSchemaRef(schemaProxy, circularSet, inlinePointer),
+		Schema:   p.resolveSchemaRef(mt.Schema, circularSet, inlinePointer),
 	}
 }
 
@@ -245,14 +245,8 @@ func (p *LibopenAPIParser) extractResponses(
 				Description: v3Resp.Description,
 			}
 
-			if v3Resp.Content != nil {
-				schemaProxy, contentType := findJSONMediaTypeSchema(v3Resp.Content)
-				if schemaProxy != nil {
-					inlinePointer := pathPointer + "/responses/" + codePair.Key +
-						"/content/" + encodeJSONPointerToken(contentType) + "/schema"
-					resp.Schema = p.resolveSchemaRef(schemaProxy, circularSet, inlinePointer)
-				}
-			}
+			schemaPointer := pathPointer + "/responses/" + codePair.Key
+			p.extractResponseContent(resp, v3Resp.Content, circularSet, schemaPointer, op.OperationId, codePair.Key)
 
 			responses[code] = resp
 		}
@@ -268,17 +262,38 @@ func (p *LibopenAPIParser) extractResponses(
 			Description: v3Default.Description,
 		}
 
-		if v3Default.Content != nil {
-			schemaProxy, contentType := findJSONMediaTypeSchema(v3Default.Content)
-			if schemaProxy != nil {
-				inlinePointer := pathPointer + "/responses/default/content/" +
-					encodeJSONPointerToken(contentType) + "/schema"
-				defaultResp.Schema = p.resolveSchemaRef(schemaProxy, circularSet, inlinePointer)
-			}
-		}
+		schemaPointer := pathPointer + "/responses/default"
+		p.extractResponseContent(defaultResp, v3Default.Content, circularSet, schemaPointer, op.OperationId, "default")
 	}
 
 	return responses, defaultResp
+}
+
+// extractResponseContent populates a Response's Schema and Example fields from
+// the content map. Extracted to reduce nesting in extractResponses.
+func (p *LibopenAPIParser) extractResponseContent(
+	resp *Response,
+	content *orderedmap.Map[string, *v3high.MediaType],
+	circularSet map[string]bool,
+	basePointer string,
+	operationID string,
+	responseCode string,
+) {
+	if content == nil {
+		return
+	}
+
+	mt, contentType := findJSONMediaType(content)
+	if mt == nil {
+		return
+	}
+
+	if mt.Schema != nil {
+		inlinePointer := basePointer + "/content/" + encodeJSONPointerToken(contentType) + "/schema"
+		resp.Schema = p.resolveSchemaRef(mt.Schema, circularSet, inlinePointer)
+	}
+
+	resp.Example = p.extractMediaTypeExample(mt, operationID, responseCode)
 }
 
 // resolveSchemaRef resolves a SchemaProxy into a SchemaRef with name,
@@ -319,30 +334,84 @@ func (p *LibopenAPIParser) resolveSchemaRef(
 	}
 }
 
-// findJSONMediaTypeSchema finds the schema for application/json (or compatible
-// JSON content type) in a content map. Returns the schema proxy and the matched
-// content type string. Returns (nil, "") if no JSON content type found.
-func findJSONMediaTypeSchema(
+// findJSONMediaType finds the MediaType object for application/json (or
+// compatible JSON content type) in a content map. Returns the MediaType and
+// the matched content type string. Returns (nil, "") if no JSON content type
+// found.
+func findJSONMediaType(
 	content *orderedmap.Map[string, *v3high.MediaType],
-) (*base.SchemaProxy, string) {
+) (*v3high.MediaType, string) {
 	if content == nil {
 		return nil, ""
 	}
 
 	// Try exact match first.
 	if mt := content.GetOrZero("application/json"); mt != nil {
-		return mt.Schema, "application/json"
+		return mt, "application/json"
 	}
 
 	// Fall back to any application/*+json variant.
 	for pair := content.Oldest(); pair != nil; pair = pair.Next() {
 		ct := pair.Key
 		if strings.HasPrefix(ct, "application/") && strings.HasSuffix(ct, "+json") {
-			return pair.Value.Schema, ct
+			return pair.Value, ct
 		}
 	}
 
 	return nil, ""
+}
+
+// extractMediaTypeExample extracts a complete response example from a Media
+// Type Object. Priority: singular `example` first, then first entry from
+// plural `examples`. Returns nil if no example is available.
+// externalValue-only examples are ignored.
+func (p *LibopenAPIParser) extractMediaTypeExample(
+	mt *v3high.MediaType, operationID string, responseCode string,
+) any {
+	// 1. Singular example — highest priority.
+	if mt.Example != nil {
+		var val any
+		if err := mt.Example.Decode(&val); err != nil {
+			p.logger.Warn("failed to decode media-type example — example will be ignored; "+
+				"check the YAML syntax in the example value",
+				"operation", operationID,
+				"response", responseCode,
+				"error", err,
+			)
+
+			return nil
+		}
+
+		return val
+	}
+
+	// 2. Plural examples — use first entry's Value (spec order preserved by orderedmap).
+	if mt.Examples != nil {
+		for pair := mt.Examples.Oldest(); pair != nil; pair = pair.Next() {
+			example := pair.Value
+			if example == nil || example.Value == nil {
+				// Skip externalValue-only or empty examples.
+				continue
+			}
+
+			var val any
+			if err := example.Value.Decode(&val); err != nil {
+				p.logger.Warn("failed to decode named media-type example — example will be ignored; "+
+					"check the YAML syntax in the example value",
+					"operation", operationID,
+					"response", responseCode,
+					"name", pair.Key,
+					"error", err,
+				)
+
+				return nil
+			}
+
+			return val
+		}
+	}
+
+	return nil
 }
 
 // schemaNameFromProxy extracts a human-readable name from a SchemaProxy.

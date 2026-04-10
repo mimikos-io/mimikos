@@ -59,6 +59,13 @@ type (
 		// convention.
 		// Example: "gid" for Asana (from fetch path /projects/{project_gid}).
 		IDFieldHint string
+
+		// ResponseExamples maps HTTP status codes to complete media-type example
+		// values extracted from the OpenAPI spec. When present, the router can
+		// return the example directly instead of generating data from the schema.
+		// Key 0 represents the default response example.
+		// Nil map means no media-type examples were defined.
+		ResponseExamples map[int]any
 	}
 )
 

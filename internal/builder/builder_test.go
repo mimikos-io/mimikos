@@ -638,6 +638,126 @@ func TestBuildBehaviorMap_OperationIDPreserved(t *testing.T) {
 	assert.Equal(t, "listPets", entry.OperationID)
 }
 
+// --- Response Examples ---
+
+func TestBuildBehaviorMap_ResponseExamplesThreaded(t *testing.T) {
+	exampleData := map[string]any{"id": 1, "name": "Fido"}
+
+	spec := &parser.ParsedSpec{
+		Operations: []parser.Operation{
+			{
+				Method: http.MethodGet,
+				Path:   "/pets/{petId}",
+				Responses: map[int]*parser.Response{
+					http.StatusOK: {
+						StatusCode: http.StatusOK,
+						Example:    exampleData,
+					},
+				},
+			},
+		},
+	}
+
+	bm, err := BuildBehaviorMap(spec, classifier.New(), nil, nil)
+	require.NoError(t, err)
+
+	entry, ok := bm.Get(http.MethodGet, "/pets/{petId}")
+	require.True(t, ok)
+	require.NotNil(t, entry.ResponseExamples, "ResponseExamples should be set when examples exist")
+
+	ex, exists := entry.ResponseExamples[http.StatusOK]
+	assert.True(t, exists, "200 example should be present")
+	assert.Equal(t, exampleData, ex)
+}
+
+func TestBuildBehaviorMap_ResponseExamplesNoExample(t *testing.T) {
+	spec := &parser.ParsedSpec{
+		Operations: []parser.Operation{
+			{
+				Method: http.MethodGet,
+				Path:   "/pets",
+				Responses: map[int]*parser.Response{
+					http.StatusOK: {
+						StatusCode: http.StatusOK,
+						// No Example set.
+					},
+				},
+			},
+		},
+	}
+
+	bm, err := BuildBehaviorMap(spec, classifier.New(), nil, nil)
+	require.NoError(t, err)
+
+	entry, ok := bm.Get(http.MethodGet, "/pets")
+	require.True(t, ok)
+	assert.Nil(t, entry.ResponseExamples, "ResponseExamples should be nil when no examples exist")
+}
+
+func TestBuildBehaviorMap_ResponseExamplesDefaultResponse(t *testing.T) {
+	errorExample := map[string]any{"message": "not found"}
+
+	spec := &parser.ParsedSpec{
+		Operations: []parser.Operation{
+			{
+				Method: http.MethodGet,
+				Path:   "/pets/{petId}",
+				Responses: map[int]*parser.Response{
+					http.StatusOK: {StatusCode: http.StatusOK},
+				},
+				DefaultResponse: &parser.Response{
+					StatusCode: 0,
+					Example:    errorExample,
+				},
+			},
+		},
+	}
+
+	bm, err := BuildBehaviorMap(spec, classifier.New(), nil, nil)
+	require.NoError(t, err)
+
+	entry, ok := bm.Get(http.MethodGet, "/pets/{petId}")
+	require.True(t, ok)
+	require.NotNil(t, entry.ResponseExamples)
+
+	ex, exists := entry.ResponseExamples[0]
+	assert.True(t, exists, "default response example should be at key 0")
+	assert.Equal(t, errorExample, ex)
+}
+
+func TestBuildBehaviorMap_ResponseExamplesMixedCodes(t *testing.T) {
+	okExample := map[string]any{"id": 1}
+
+	spec := &parser.ParsedSpec{
+		Operations: []parser.Operation{
+			{
+				Method: http.MethodGet,
+				Path:   "/pets/{petId}",
+				Responses: map[int]*parser.Response{
+					http.StatusOK:       {StatusCode: http.StatusOK, Example: okExample},
+					http.StatusNotFound: {StatusCode: http.StatusNotFound}, // No example.
+				},
+			},
+		},
+	}
+
+	bm, err := BuildBehaviorMap(spec, classifier.New(), nil, nil)
+	require.NoError(t, err)
+
+	entry, ok := bm.Get(http.MethodGet, "/pets/{petId}")
+	require.True(t, ok)
+	require.NotNil(t, entry.ResponseExamples)
+
+	// 200 has example.
+	ex, exists := entry.ResponseExamples[http.StatusOK]
+	assert.True(t, exists)
+	assert.Equal(t, okExample, ex)
+
+	// 404 should NOT be in ResponseExamples (no example defined).
+	_, exists = entry.ResponseExamples[http.StatusNotFound]
+	assert.False(t, exists, "404 without example should not be in ResponseExamples")
+}
+
 // --- Corpus-driven integration test ---
 // Tests the full pipeline: spec bytes → parser → compiler → builder → BehaviorMap.
 // Also validates schema compilation against real-world specs.
