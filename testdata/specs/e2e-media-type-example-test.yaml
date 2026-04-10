@@ -1,0 +1,252 @@
+openapi: "3.0.0"
+info:
+  title: Media-Type Example Test
+  version: "1.0.0"
+  description: >
+    Test spec for verifying media-type examples at Level 1 (router returns
+    example as-is) and Level 2 (generator uses schema-level examples for
+    objects/arrays). Covers singular example, plural examples, $ref examples,
+    per-status-code examples, mixed example+schema, schema-only
+    fallback, and POST with example.
+paths:
+  /items:
+    get:
+      operationId: listItems
+      summary: List all items
+      responses:
+        "200":
+          description: A list of items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Item"
+              example:
+                - id: 1
+                  name: "Widget"
+                  price: 9.99
+                - id: 2
+                  name: "Gadget"
+                  price: 19.99
+    post:
+      operationId: createItem
+      summary: Create an item
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewItem"
+      responses:
+        "201":
+          description: Created item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Item"
+              example:
+                id: 100
+                name: "New Thing"
+                price: 5.50
+
+  /items/{itemId}:
+    get:
+      operationId: getItem
+      summary: Get an item by ID
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: A single item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Item"
+              examples:
+                widget:
+                  value:
+                    id: 42
+                    name: "Widget"
+                    price: 9.99
+                gadget:
+                  value:
+                    id: 43
+                    name: "Gadget"
+                    price: 19.99
+        "404":
+          description: Item not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: 404
+                message: "Item not found"
+
+  /items/{itemId}/reviews:
+    get:
+      operationId: listItemReviews
+      summary: List reviews for an item (CF2 — $ref in named examples)
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: A list of reviews
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Review"
+              examples:
+                sampleReviews:
+                  $ref: "#/components/examples/ReviewListExample"
+
+  /mixed:
+    get:
+      operationId: getMixed
+      summary: Endpoint with both schema and media-type example
+      responses:
+        "200":
+          description: Has both schema and example — example should win
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  alpha:
+                    type: string
+                  beta:
+                    type: integer
+              example:
+                alpha: "authored"
+                beta: 42
+
+  /schema-only:
+    get:
+      operationId: getSchemaOnly
+      summary: Endpoint with schema but no media-type example
+      responses:
+        "200":
+          description: No example — should generate from schema
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  count:
+                    type: integer
+
+  /nested:
+    get:
+      operationId: getNested
+      summary: Level 2 — object property with schema-level example
+      responses:
+        "200":
+          description: Object with a sub-object that has schema example
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  title:
+                    type: string
+                  metadata:
+                    $ref: "#/components/schemas/Metadata"
+
+  /tags:
+    get:
+      operationId: getTags
+      summary: Level 2 — array property with schema-level example
+      responses:
+        "200":
+          description: Object with array that has schema example
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  label:
+                    type: string
+                  tags:
+                    $ref: "#/components/schemas/TagList"
+
+components:
+  schemas:
+    Item:
+      type: object
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        price:
+          type: number
+
+    NewItem:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+        price:
+          type: number
+
+    Error:
+      type: object
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+
+    Review:
+      type: object
+      properties:
+        rating:
+          type: integer
+        comment:
+          type: string
+
+    Metadata:
+      type: object
+      properties:
+        author:
+          type: string
+        version:
+          type: integer
+      example:
+        author: "Alice"
+        version: 3
+
+    TagList:
+      type: array
+      items:
+        type: string
+      example:
+        - "go"
+        - "openapi"
+        - "mock"
+
+  examples:
+    ReviewListExample:
+      value:
+        - rating: 5
+          comment: "Excellent"
+        - rating: 3
+          comment: "Average"

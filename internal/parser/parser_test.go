@@ -619,7 +619,9 @@ paths:
 
 	m, ok := resp.Example.(map[string]any)
 	require.True(t, ok, "example should decode to map[string]any, got %T", resp.Example)
-	assert.Equal(t, 1, m["id"])
+	// CF1: YAML integers should be normalized to int64 for consistency with
+	// the generator (which produces int64 for integer schema types).
+	assert.Equal(t, int64(1), m["id"], "YAML int should be normalized to int64")
 	assert.Equal(t, "Fido", m["name"])
 }
 
@@ -668,7 +670,7 @@ paths:
 	// Decision #110: first named example wins (spec order).
 	m, ok := resp.Example.(map[string]any)
 	require.True(t, ok, "example should decode to map[string]any, got %T", resp.Example)
-	assert.Equal(t, 1, m["id"])
+	assert.Equal(t, int64(1), m["id"], "YAML int should be normalized to int64")
 	assert.Equal(t, "Fido", m["name"])
 }
 
@@ -709,7 +711,7 @@ paths:
 
 	m, ok := resp.Example.(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, 99, m["id"], "singular example should take priority")
+	assert.Equal(t, int64(99), m["id"], "singular example should take priority")
 	assert.Equal(t, "Singular", m["name"])
 }
 
@@ -864,5 +866,5 @@ components:
 
 	m, ok := resp.Example.(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, 1, m["id"])
+	assert.Equal(t, int64(1), m["id"])
 }

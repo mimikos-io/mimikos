@@ -30,6 +30,11 @@ type SelectedScenario struct {
 	// Schema is the compiled response schema to generate data from, or nil
 	// if the operation defines no response schema for this status code.
 	Schema *model.CompiledSchema
+
+	// Example is the media-type example for this status code, or nil if no
+	// example is defined. When non-nil, the router returns this value
+	// directly instead of generating data from Schema.
+	Example any
 }
 
 // SelectScenario picks the response scenario for a matched operation.
@@ -61,21 +66,32 @@ func SelectScenario(entry *model.BehaviorEntry, requestedStatus string) (*Select
 	return &SelectedScenario{
 		StatusCode: code,
 		Schema:     entry.ResponseSchemas[code],
+		Example:    entry.ResponseExamples[code],
 	}, nil
 }
 
 // selectSuccess returns the success scenario with the entry's SuccessCode
 // and corresponding response schema. Falls back to the default response
-// schema (key 0) per Decision #31.
+// schema (key 0). The example fallback is coupled to the
+// schema fallback: the default example is only used when the schema also
+// fell back to default. This prevents a default (error) example from being
+// returned for a success status code that has its own schema.
 func selectSuccess(entry *model.BehaviorEntry) *SelectedScenario {
 	schema := entry.ResponseSchemas[entry.SuccessCode]
-	if schema == nil {
+	example := entry.ResponseExamples[entry.SuccessCode]
+
+	if schema == nil { // fallback to defaults
 		schema = entry.ResponseSchemas[0]
+
+		if example == nil {
+			example = entry.ResponseExamples[0]
+		}
 	}
 
 	return &SelectedScenario{
 		StatusCode: entry.SuccessCode,
 		Schema:     schema,
+		Example:    example,
 	}
 }
 

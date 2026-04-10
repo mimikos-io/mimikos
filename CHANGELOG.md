@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-04-10
+
+### Added
+
+#### Media-Type Example Responses
+- When an OpenAPI spec defines `example` or `examples` on a response media type, Mimikos now returns the authored example directly instead of generating data from the schema
+- Supports both singular `example` (inline value) and plural `examples` (named Example Objects, first entry used)
+- Works at two levels:
+  - **Level 1 (router):** Complete media-type examples bypass generation entirely — returned as-is with correct status code
+  - **Level 2 (generator):** Object/array schema-level examples replace sub-property generation for that subtree
+- Per-status-code examples: each response code can have its own example, selectable via `X-Mimikos-Status` header
+- `$ref` examples (e.g., `$ref: '#/components/examples/FooExample'`) resolve correctly via libopenapi
+- POST/PUT/PATCH responses with examples work identically to GET
+- Media-type examples bypass response validation — the spec author wrote both the schema and the example
+
+### Fixed
+
+#### YAML Integer Type Normalization
+- YAML integers in media-type examples are now normalized to `int64` during parsing, matching the generator's output type
+- Previously, YAML `int` values (from `yaml.Node.Decode`) could differ from generator `int64` values in Go-level comparisons, despite being identical on the JSON wire
+
 ## [0.3.1] - 2026-04-09
 
 ### Added
