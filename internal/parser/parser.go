@@ -382,7 +382,7 @@ func (p *LibopenAPIParser) extractMediaTypeExample(
 			return nil
 		}
 
-		return val
+		return normalizeYAMLTypes(val)
 	}
 
 	// 2. Plural examples — use first entry's Value (spec order preserved by orderedmap).
@@ -407,11 +407,41 @@ func (p *LibopenAPIParser) extractMediaTypeExample(
 				return nil
 			}
 
-			return val
+			return normalizeYAMLTypes(val)
 		}
 	}
 
 	return nil
+}
+
+// normalizeYAMLTypes recursively converts YAML-native Go types to types
+// consistent with the generator output. Specifically, yaml.Node.Decode
+// produces Go `int` for YAML integers, but the generator produces `int64`.
+// On the wire (JSON) they're identical, but Go-level comparisons differ.
+// This function normalizes int → int64 throughout the value tree so
+// downstream code (router, tests) doesn't need to worry about it.
+//
+// Note: map and slice values are mutated in place for efficiency. The caller
+// must not reuse the input if it needs the original YAML-native types.
+func normalizeYAMLTypes(v any) any {
+	switch val := v.(type) {
+	case int:
+		return int64(val)
+	case map[string]any:
+		for k, elem := range val {
+			val[k] = normalizeYAMLTypes(elem)
+		}
+
+		return val
+	case []any:
+		for i, elem := range val {
+			val[i] = normalizeYAMLTypes(elem)
+		}
+
+		return val
+	default:
+		return v
+	}
 }
 
 // schemaNameFromProxy extracts a human-readable name from a SchemaProxy.

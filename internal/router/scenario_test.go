@@ -284,3 +284,132 @@ func TestSelectScenario_FormatAvailableCodes(t *testing.T) {
 	// Error message should list all available codes sorted.
 	assert.Contains(t, err.Error(), "200, 404, 500")
 }
+
+// --- Media-type example selection (Task 25) ---
+
+func TestSelectScenario_SuccessWithExample(t *testing.T) {
+	example := map[string]any{"id": float64(1), "name": "Fido"}
+	entry := &model.BehaviorEntry{
+		Type:        model.BehaviorFetch,
+		SuccessCode: http.StatusOK,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusOK: {Name: "Pet"},
+		},
+		ResponseExamples: map[int]any{
+			http.StatusOK: example,
+		},
+	}
+
+	result, err := SelectScenario(entry, "")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, http.StatusOK, result.StatusCode)
+	assert.Equal(t, example, result.Example)
+}
+
+func TestSelectScenario_SuccessWithoutExample(t *testing.T) {
+	entry := &model.BehaviorEntry{
+		Type:        model.BehaviorFetch,
+		SuccessCode: http.StatusOK,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusOK: {Name: "Pet"},
+		},
+	}
+
+	result, err := SelectScenario(entry, "")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, http.StatusOK, result.StatusCode)
+	assert.Nil(t, result.Example)
+}
+
+func TestSelectScenario_ExplicitStatusWithExample(t *testing.T) {
+	errorExample := map[string]any{"error": "not found"}
+	entry := &model.BehaviorEntry{
+		Type:        model.BehaviorFetch,
+		SuccessCode: http.StatusOK,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusOK:       {Name: "Pet"},
+			http.StatusNotFound: {Name: "Error"},
+		},
+		ResponseExamples: map[int]any{
+			http.StatusOK:       map[string]any{"id": float64(1)},
+			http.StatusNotFound: errorExample,
+		},
+	}
+
+	result, err := SelectScenario(entry, "404")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, http.StatusNotFound, result.StatusCode)
+	assert.Equal(t, errorExample, result.Example)
+}
+
+func TestSelectScenario_DefaultResponseFallbackWithExample(t *testing.T) {
+	// Entry has no schema for SuccessCode (200) but has default (key 0).
+	// Also has a default example.
+	defaultExample := map[string]any{"status": "ok"}
+	entry := &model.BehaviorEntry{
+		Type:        model.BehaviorFetch,
+		SuccessCode: http.StatusOK,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			0: {Name: "DefaultResponse"},
+		},
+		ResponseExamples: map[int]any{
+			0: defaultExample,
+		},
+	}
+
+	result, err := SelectScenario(entry, "")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, http.StatusOK, result.StatusCode)
+	assert.Equal(t, "DefaultResponse", result.Schema.Name)
+	assert.Equal(t, defaultExample, result.Example)
+}
+
+func TestSelectScenario_SuccessSchemaNoExample_DefaultExampleIgnored(t *testing.T) {
+	// Success code has a schema but no example. Default response has an
+	// example. The default example must NOT leak into the success scenario —
+	// it was authored for the error response, not the success response.
+	entry := &model.BehaviorEntry{
+		Type:        model.BehaviorFetch,
+		SuccessCode: http.StatusOK,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusOK: {Name: "Pet"},
+			0:             {Name: "Error"},
+		},
+		ResponseExamples: map[int]any{
+			0: map[string]any{"error": "default error"},
+		},
+	}
+
+	result, err := SelectScenario(entry, "")
+
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, result.StatusCode)
+	assert.Equal(t, "Pet", result.Schema.Name)
+	assert.Nil(t, result.Example, "default example must not substitute for success response")
+}
+
+func TestSelectScenario_ExistingTestsStillPassNoExample(t *testing.T) {
+	// Create behavior — no ResponseExamples (nil map).
+	entry := &model.BehaviorEntry{
+		Type:        model.BehaviorCreate,
+		SuccessCode: http.StatusCreated,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusCreated: {Name: "Pet"},
+		},
+	}
+
+	result, err := SelectScenario(entry, "")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, http.StatusCreated, result.StatusCode)
+	assert.Nil(t, result.Example, "nil ResponseExamples map should produce nil Example")
+}

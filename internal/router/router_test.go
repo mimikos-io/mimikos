@@ -556,6 +556,107 @@ func TestHandler_LiteralWildcardSibling_MethodNotAllowed(t *testing.T) {
 	})
 }
 
+// --- Media-type example response tests (Task 25) ---
+
+func TestHandler_ExampleResponse_ReturnsExampleBody(t *testing.T) {
+	example := map[string]any{"id": float64(42), "name": "Fido", "tag": "dog"}
+
+	bm := model.NewBehaviorMap()
+	bm.Put(model.BehaviorEntry{
+		Method:      http.MethodGet,
+		PathPattern: "/pets/{petId}",
+		Type:        model.BehaviorFetch,
+		SuccessCode: http.StatusOK,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusOK: {Name: "Pet", Schema: petObjectSchema()},
+		},
+		ResponseExamples: map[int]any{
+			http.StatusOK: example,
+		},
+		Source:     model.SourceHeuristic,
+		Confidence: 0.9,
+	})
+
+	resp := merrors.NewResponder()
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
+	h := NewHandler(bm, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/pets/1", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	//nolint:testifylint // header string, not JSON
+	assert.Equal(t, contentTypeJSON, rec.Header().Get("Content-Type"))
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.InDelta(t, 42.0, body["id"], 0.1)
+	assert.Equal(t, "Fido", body["name"])
+	assert.Equal(t, "dog", body["tag"])
+}
+
+func TestHandler_NoExample_FallsThroughToGeneration(t *testing.T) {
+	bm := model.NewBehaviorMap()
+	bm.Put(model.BehaviorEntry{
+		Method:      http.MethodGet,
+		PathPattern: "/pets/{petId}",
+		Type:        model.BehaviorFetch,
+		SuccessCode: http.StatusOK,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusOK: {Name: "Pet", Schema: petObjectSchema()},
+		},
+		// No ResponseExamples — should use generation as before.
+		Source:     model.SourceHeuristic,
+		Confidence: 0.9,
+	})
+
+	resp := merrors.NewResponder()
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
+	h := NewHandler(bm, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/pets/1", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Contains(t, body, "id", "generated response should have id")
+	assert.Contains(t, body, "name", "generated response should have name")
+}
+
+func TestHandler_ExampleResponse_204NoContent_NeverReturnsBody(t *testing.T) {
+	// Even if an example exists for 204, no body should be written.
+	bm := model.NewBehaviorMap()
+	bm.Put(model.BehaviorEntry{
+		Method:      http.MethodDelete,
+		PathPattern: "/pets/{petId}",
+		Type:        model.BehaviorDelete,
+		SuccessCode: http.StatusNoContent,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusNoContent: nil,
+		},
+		ResponseExamples: map[int]any{
+			http.StatusNoContent: map[string]any{"message": "deleted"},
+		},
+		Source:     model.SourceHeuristic,
+		Confidence: 0.9,
+	})
+
+	resp := merrors.NewResponder()
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
+	h := NewHandler(bm, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+
+	req := httptest.NewRequest(http.MethodDelete, "/pets/1", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNoContent, rec.Code)
+	assert.Empty(t, rec.Body.Bytes(), "204 should have no body even with example")
+}
+
 // --- isJSONContentType unit tests (NB2) ---
 
 func TestIsJSONContentType(t *testing.T) {

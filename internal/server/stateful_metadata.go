@@ -27,7 +27,8 @@ func annotateStatefulMetadata(bm *model.BehaviorMap, logger *slog.Logger) {
 	for _, e := range bm.Entries() {
 		changed := false
 
-		switch e.Type { //nolint:exhaustive // delete and generic don't need metadata
+		// delete and generic don't need metadata
+		switch e.Type { //nolint:exhaustive
 		case model.BehaviorCreate, model.BehaviorFetch, model.BehaviorUpdate:
 			e.WrapperKey = detectWrapperKey(e.ResponseSchemas, e.SuccessCode)
 			changed = true

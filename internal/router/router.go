@@ -172,7 +172,10 @@ func (h *Handler) operationHandler(
 }
 
 // handleDeterministicMode generates a response from the schema using a fingerprint
-// seed. The same request always produces the same response.
+// seed. The same request always produces the same response. When a media-type
+// example is defined for the selected scenario, it is returned as-is — bypassing
+// generation and response validation (the spec author wrote both schema and
+// example, so validation would only catch spec defects, not Mimikos bugs).
 func (h *Handler) handleDeterministicMode(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -184,6 +187,19 @@ func (h *Handler) handleDeterministicMode(
 	scenario, err := SelectScenario(&entry, requestedStatus)
 	if err != nil {
 		h.responder.InvalidScenario(w, err.Error())
+
+		return
+	}
+
+	// Media-type example: return spec-authored response directly.
+	// Bypasses generation and response validation.
+	// 204 No Content always has no body regardless of example.
+	if scenario.Example != nil && scenario.StatusCode != http.StatusNoContent {
+		w.Header().Set("Content-Type", contentTypeJSON)
+		w.WriteHeader(scenario.StatusCode)
+
+		//nolint:errchkjson // write failures (client disconnect) are unrecoverable
+		_ = json.NewEncoder(w).Encode(scenario.Example)
 
 		return
 	}
