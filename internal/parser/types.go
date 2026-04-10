@@ -90,6 +90,13 @@ type (
 		// Extracted from the application/json content type.
 		// Nil if the response has no JSON content (e.g., 204 No Content).
 		Schema *SchemaRef
+
+		// Example is the complete response body example extracted from the
+		// Media Type Object's `example` (singular) or `examples` (plural,
+		// first entry's value). Nil if no media-type example is defined.
+		// When present, the router can return this value directly instead
+		// of generating data from the schema.
+		Example any
 	}
 
 	// SchemaRef is a resolved, annotated schema reference.

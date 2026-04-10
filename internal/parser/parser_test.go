@@ -579,3 +579,290 @@ paths:
 		assert.True(t, op.RequestBody.Required)
 	})
 }
+
+// --- Media-Type Example Extraction ---
+
+func TestParse_MediaTypeExampleSingular(t *testing.T) {
+	p := newParser()
+
+	doc := newDocument(t, []byte(`openapi: "3.0.0"
+info:
+  title: Example Test
+  version: "1.0"
+paths:
+  /pets/{petId}:
+    get:
+      operationId: getPet
+      responses:
+        "200":
+          description: A pet
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  name:
+                    type: string
+              example:
+                id: 1
+                name: "Fido"`))
+
+	spec, err := p.Parse(context.Background(), doc)
+	require.NoError(t, err)
+	require.Len(t, spec.Operations, 1)
+
+	resp := spec.Operations[0].Responses[200]
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.Example, "singular media-type example should be extracted")
+
+	m, ok := resp.Example.(map[string]any)
+	require.True(t, ok, "example should decode to map[string]any, got %T", resp.Example)
+	assert.Equal(t, 1, m["id"])
+	assert.Equal(t, "Fido", m["name"])
+}
+
+func TestParse_MediaTypeExamplesPlural(t *testing.T) {
+	p := newParser()
+
+	// Uses the plural `examples` keyword with named Example Objects.
+	doc := newDocument(t, []byte(`openapi: "3.0.0"
+info:
+  title: Plural Examples Test
+  version: "1.0"
+paths:
+  /pets/{petId}:
+    get:
+      operationId: getPet
+      responses:
+        "200":
+          description: A pet
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  name:
+                    type: string
+              examples:
+                dog:
+                  value:
+                    id: 1
+                    name: "Fido"
+                cat:
+                  value:
+                    id: 2
+                    name: "Whiskers"`))
+
+	spec, err := p.Parse(context.Background(), doc)
+	require.NoError(t, err)
+	require.Len(t, spec.Operations, 1)
+
+	resp := spec.Operations[0].Responses[200]
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.Example, "first plural example should be extracted")
+
+	// Decision #110: first named example wins (spec order).
+	m, ok := resp.Example.(map[string]any)
+	require.True(t, ok, "example should decode to map[string]any, got %T", resp.Example)
+	assert.Equal(t, 1, m["id"])
+	assert.Equal(t, "Fido", m["name"])
+}
+
+func TestParse_MediaTypeExampleSingularOverPlural(t *testing.T) {
+	p := newParser()
+
+	// Per OpenAPI spec, `example` and `examples` are mutually exclusive.
+	// If both appear (malformed but possible), singular wins.
+	doc := newDocument(t, []byte(`openapi: "3.0.0"
+info:
+  title: Mutual Exclusivity Test
+  version: "1.0"
+paths:
+  /pets/{petId}:
+    get:
+      operationId: getPet
+      responses:
+        "200":
+          description: A pet
+          content:
+            application/json:
+              schema:
+                type: object
+              example:
+                id: 99
+                name: "Singular"
+              examples:
+                first:
+                  value:
+                    id: 1
+                    name: "Plural"`))
+
+	spec, err := p.Parse(context.Background(), doc)
+	require.NoError(t, err)
+
+	resp := spec.Operations[0].Responses[200]
+	require.NotNil(t, resp.Example)
+
+	m, ok := resp.Example.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, 99, m["id"], "singular example should take priority")
+	assert.Equal(t, "Singular", m["name"])
+}
+
+func TestParse_MediaTypeNoExample(t *testing.T) {
+	p := newParser()
+
+	doc := newDocument(t, []byte(`openapi: "3.0.0"
+info:
+  title: No Example Test
+  version: "1.0"
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      responses:
+        "200":
+          description: A list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object`))
+
+	spec, err := p.Parse(context.Background(), doc)
+	require.NoError(t, err)
+
+	resp := spec.Operations[0].Responses[200]
+	require.NotNil(t, resp)
+	assert.Nil(t, resp.Example, "no media-type example defined — should be nil")
+	assert.NotNil(t, resp.Schema, "schema should still be extracted")
+}
+
+func TestParse_MediaTypeExampleOnDefaultResponse(t *testing.T) {
+	p := newParser()
+
+	doc := newDocument(t, []byte(`openapi: "3.0.0"
+info:
+  title: Default Response Example Test
+  version: "1.0"
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+        default:
+          description: Error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+              example:
+                message: "Something went wrong"`))
+
+	spec, err := p.Parse(context.Background(), doc)
+	require.NoError(t, err)
+
+	// Default response should have example extracted.
+	require.NotNil(t, spec.Operations[0].DefaultResponse)
+	require.NotNil(t, spec.Operations[0].DefaultResponse.Example)
+
+	m, ok := spec.Operations[0].DefaultResponse.Example.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "Something went wrong", m["message"])
+
+	// Regular 200 response has no example.
+	assert.Nil(t, spec.Operations[0].Responses[200].Example)
+}
+
+func TestParse_MediaTypeExampleExternalValueIgnored(t *testing.T) {
+	p := newParser()
+
+	// externalValue only — no inline value. Should result in nil Example.
+	doc := newDocument(t, []byte(`openapi: "3.0.0"
+info:
+  title: External Value Test
+  version: "1.0"
+paths:
+  /pets/{petId}:
+    get:
+      operationId: getPet
+      responses:
+        "200":
+          description: A pet
+          content:
+            application/json:
+              schema:
+                type: object
+              examples:
+                fromFile:
+                  externalValue: "https://example.com/pet.json"`))
+
+	spec, err := p.Parse(context.Background(), doc)
+	require.NoError(t, err)
+
+	resp := spec.Operations[0].Responses[200]
+	require.NotNil(t, resp)
+	assert.Nil(t, resp.Example, "externalValue-only example should be ignored")
+}
+
+func TestParse_MediaTypeExampleWithSchemaStillExtracted(t *testing.T) {
+	p := newParser()
+
+	// Verify that having an example doesn't interfere with schema extraction.
+	doc := newDocument(t, []byte(`openapi: "3.0.0"
+info:
+  title: Both Schema and Example
+  version: "1.0"
+paths:
+  /pets/{petId}:
+    get:
+      operationId: getPet
+      responses:
+        "200":
+          description: A pet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pet"
+              example:
+                id: 1
+                name: "Fido"
+components:
+  schemas:
+    Pet:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string`))
+
+	spec, err := p.Parse(context.Background(), doc)
+	require.NoError(t, err)
+
+	resp := spec.Operations[0].Responses[200]
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.Schema, "schema should still be extracted alongside example")
+	assert.Equal(t, "Pet", resp.Schema.Name)
+	require.NotNil(t, resp.Example)
+
+	m, ok := resp.Example.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, 1, m["id"])
+}

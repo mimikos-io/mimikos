@@ -180,6 +180,12 @@ func (g *DataGenerator) generate(
 
 	switch typ {
 	case typeObject:
+		// Level 2: schema-root example for objects. Authored examples bypass
+		// sub-property generation entirely (Decision #107).
+		if len(schema.Examples) > 0 {
+			return schema.Examples[0], nil
+		}
+
 		if depth >= g.maxDepth {
 			g.logger.Warn(warnDepthObject,
 				"field", fieldName, "depth", depth, "maxDepth", g.maxDepth,
@@ -190,6 +196,12 @@ func (g *DataGenerator) generate(
 
 		return g.generateObject(schema, seed, depth, recurse)
 	case typeArray:
+		// Level 2: schema-root example for arrays. Authored examples bypass
+		// item generation entirely (Decision #107).
+		if len(schema.Examples) > 0 {
+			return schema.Examples[0], nil
+		}
+
 		if depth >= g.maxDepth {
 			g.logger.Warn(warnDepthArray,
 				"field", fieldName, "depth", depth, "maxDepth", g.maxDepth,

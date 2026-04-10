@@ -1542,3 +1542,153 @@ func TestGenerateBranch_ThreeWayNullable(t *testing.T) {
 	assert.True(t, sawString && sawInt,
 		"both non-null branches should be reachable (sawString=%v, sawInt=%v)", sawString, sawInt)
 }
+
+// --- Level 2: Object/array schema examples (24.4) ---
+
+func TestGenerateObjectWithSchemaExample(t *testing.T) {
+	t.Parallel()
+
+	g := NewDataGenerator(nil, 0, nil)
+
+	// Object schema with an example — should return the example directly.
+	schema := &jsonschema.Schema{
+		Types: newTypes("object"),
+		Properties: map[string]*jsonschema.Schema{
+			"name": {Types: newTypes("string")},
+			"age":  {Types: newTypes("integer")},
+		},
+		Examples: []any{
+			map[string]any{"name": "Fido", "age": 3},
+		},
+	}
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	m, ok := val.(map[string]any)
+	require.True(t, ok, "expected map[string]any, got %T", val)
+	assert.Equal(t, "Fido", m["name"])
+	assert.Equal(t, 3, m["age"])
+}
+
+func TestGenerateArrayWithSchemaExample(t *testing.T) {
+	t.Parallel()
+
+	g := NewDataGenerator(nil, 0, nil)
+
+	// Array schema with an example — should return the example directly.
+	schema := &jsonschema.Schema{
+		Types:     newTypes("array"),
+		Items2020: &jsonschema.Schema{Types: newTypes("string")},
+		Examples: []any{
+			[]any{"alpha", "beta", "gamma"},
+		},
+	}
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	arr, ok := val.([]any)
+	require.True(t, ok, "expected []any, got %T", val)
+	assert.Equal(t, []any{"alpha", "beta", "gamma"}, arr)
+}
+
+func TestGenerateObjectWithoutSchemaExample(t *testing.T) {
+	t.Parallel()
+
+	g := NewDataGenerator(nil, 0, nil)
+
+	// Object schema without examples — should fall through to generateObject.
+	schema := objectSchema(map[string]*jsonschema.Schema{
+		"name": {Types: newTypes("string")},
+	})
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	m, ok := val.(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, m, "name", "should generate properties normally")
+}
+
+func TestGenerateArrayWithoutSchemaExample(t *testing.T) {
+	t.Parallel()
+
+	g := NewDataGenerator(nil, 0, nil)
+
+	// Array without examples — should fall through to generateArray.
+	schema := &jsonschema.Schema{
+		Types:     newTypes("array"),
+		Items2020: &jsonschema.Schema{Types: newTypes("string")},
+	}
+
+	val, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	arr, ok := val.([]any)
+	require.True(t, ok)
+	assert.NotEmpty(t, arr, "should generate items normally")
+}
+
+func TestGenerateNestedObjectChildHasExample(t *testing.T) {
+	t.Parallel()
+
+	g := NewDataGenerator(nil, 0, nil)
+
+	// Parent has no example, child property has an object-level example.
+	childSchema := &jsonschema.Schema{
+		Types: newTypes("object"),
+		Properties: map[string]*jsonschema.Schema{
+			"city": {Types: newTypes("string")},
+			"zip":  {Types: newTypes("string")},
+		},
+		Examples: []any{
+			map[string]any{"city": "Portland", "zip": "97201"},
+		},
+	}
+
+	parentSchema := objectSchema(map[string]*jsonschema.Schema{
+		"name":    {Types: newTypes("string")},
+		"address": childSchema,
+	})
+
+	val, err := g.Generate(parentSchema, 42)
+	require.NoError(t, err)
+
+	m, ok := val.(map[string]any)
+	require.True(t, ok)
+
+	// Parent's "name" should be generated normally.
+	assert.Contains(t, m, "name")
+	assert.IsType(t, "", m["name"])
+
+	// Child "address" should be the example value.
+	addr, ok := m["address"].(map[string]any)
+	require.True(t, ok, "address should be map[string]any")
+	assert.Equal(t, "Portland", addr["city"])
+	assert.Equal(t, "97201", addr["zip"])
+}
+
+func TestGenerateObjectExampleDeterministic(t *testing.T) {
+	t.Parallel()
+
+	g := NewDataGenerator(nil, 0, nil)
+
+	schema := &jsonschema.Schema{
+		Types: newTypes("object"),
+		Properties: map[string]*jsonschema.Schema{
+			"id": {Types: newTypes("integer")},
+		},
+		Examples: []any{
+			map[string]any{"id": 42},
+		},
+	}
+
+	// Same input → same output.
+	val1, err1 := g.Generate(schema, 100)
+	require.NoError(t, err1)
+
+	val2, err2 := g.Generate(schema, 100)
+	require.NoError(t, err2)
+	assert.Equal(t, val1, val2, "object example should be deterministic")
+}
