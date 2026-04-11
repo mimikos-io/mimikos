@@ -38,13 +38,30 @@ var (
 	// ErrInvalidEntry is returned when the builder produces a BehaviorEntry that
 	// fails validation. This indicates a bug in the builder's assembly logic.
 	ErrInvalidEntry = errors.New("builder: invalid behavior entry")
+
+	// ErrEntryPanicked is returned when buildEntry panics on a spec edge case.
+	ErrEntryPanicked = errors.New("builder: entry panicked")
 )
+
+// FailedEntry records an operation that could not be processed during startup.
+// This happens when buildEntry panics on a spec edge case (nil pointer, unexpected
+// schema shape). The server starts without these endpoints and serves an actionable
+// error if a client requests them.
+type FailedEntry struct {
+	Method      string
+	PathPattern string
+	Error       string // recovered panic message
+}
 
 // successCodeDefault is used when the spec defines no responses for an operation.
 const successCodeDefault = http.StatusOK
 
 // BuildBehaviorMap classifies every operation in the parsed spec, compiles
 // referenced schemas, infers scenarios, and assembles a complete BehaviorMap.
+//
+// Operations that panic during processing are recovered, logged, and returned
+// as FailedEntry values. The BehaviorMap contains only successfully processed
+// entries, allowing the server to start with partial coverage.
 //
 // The compiler is nil-safe: if sc is nil, schema compilation is skipped and
 // all schema fields in BehaviorEntry are nil. The logger is nil-safe: if
@@ -54,13 +71,13 @@ func BuildBehaviorMap(
 	cls *classifier.Classifier,
 	sc *compiler.SchemaCompiler,
 	logger *slog.Logger,
-) (*model.BehaviorMap, error) {
+) (*model.BehaviorMap, []FailedEntry, error) {
 	if spec == nil {
-		return nil, ErrNilSpec
+		return nil, nil, ErrNilSpec
 	}
 
 	if cls == nil {
-		return nil, ErrNilClassifier
+		return nil, nil, ErrNilClassifier
 	}
 
 	if logger == nil {
@@ -69,17 +86,53 @@ func BuildBehaviorMap(
 
 	bm := model.NewBehaviorMap()
 
-	for _, op := range spec.Operations {
-		entry := buildEntry(op, cls, sc, logger)
+	var failed []FailedEntry
 
-		if err := entry.Validate(); err != nil {
-			return nil, fmt.Errorf("%w: %s %s: %w", ErrInvalidEntry, op.Method, op.Path, err)
+	for _, op := range spec.Operations {
+		entry, err := safeBuildEntry(op, cls, sc, logger)
+		if err != nil {
+			logger.Warn("endpoint panicked during startup — skipping",
+				"method", op.Method,
+				"path", op.Path,
+				"error", err,
+			)
+
+			failed = append(failed, FailedEntry{
+				Method:      op.Method,
+				PathPattern: op.Path,
+				Error:       err.Error(),
+			})
+
+			continue
+		}
+
+		if valErr := entry.Validate(); valErr != nil {
+			return nil, nil, fmt.Errorf("%w: %s %s: %w", ErrInvalidEntry, op.Method, op.Path, valErr)
 		}
 
 		bm.Put(entry)
 	}
 
-	return bm, nil
+	return bm, failed, nil
+}
+
+// safeBuildEntry wraps buildEntry with panic recovery. Returns the entry on
+// success, or an error describing the recovered panic.
+//
+//nolint:nonamedreturns // named returns required for defer/recover to set the error
+func safeBuildEntry(
+	op parser.Operation,
+	cls *classifier.Classifier,
+	sc *compiler.SchemaCompiler,
+	logger *slog.Logger,
+) (entry model.BehaviorEntry, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%w: %v", ErrEntryPanicked, r)
+		}
+	}()
+
+	return buildEntry(op, cls, sc, logger), nil
 }
 
 // buildEntry assembles a single BehaviorEntry from an operation by running
@@ -100,24 +153,32 @@ func buildEntry(
 	// Step 3: Build response schemas map and compile schemas.
 	var requestSchema *model.CompiledSchema
 
-	responseSchemas := buildResponseSchemas(op, sc, logger)
+	var degradedRequest string
+
+	responseSchemas, responseErrors := buildResponseSchemas(op, sc, logger)
 
 	if sc != nil {
-		requestSchema = compileRequestSchema(op, sc, logger)
+		requestSchema, degradedRequest = compileRequestSchema(op, sc, logger)
 	}
 
+	// Step 4: Record degradation for the success code's response schema.
+	// Only the success code matters — error schemas have writeErrorFallback.
+	degradedResponse := responseErrors[successCode]
+
 	return model.BehaviorEntry{
-		OperationID:      op.OperationID,
-		Method:           op.Method,
-		PathPattern:      op.Path,
-		Type:             result.Type,
-		SuccessCode:      successCode,
-		RequestSchema:    requestSchema,
-		ResponseSchemas:  responseSchemas,
-		ResponseExamples: buildResponseExamples(op),
-		BodyRequired:     op.RequestBody != nil && op.RequestBody.Required,
-		Source:           model.SourceHeuristic,
-		Confidence:       result.Confidence,
+		OperationID:            op.OperationID,
+		Method:                 op.Method,
+		PathPattern:            op.Path,
+		Type:                   result.Type,
+		SuccessCode:            successCode,
+		RequestSchema:          requestSchema,
+		ResponseSchemas:        responseSchemas,
+		ResponseExamples:       buildResponseExamples(op),
+		BodyRequired:           op.RequestBody != nil && op.RequestBody.Required,
+		Source:                 model.SourceHeuristic,
+		Confidence:             result.Confidence,
+		DegradedResponseSchema: degradedResponse,
+		DegradedRequestSchema:  degradedRequest,
 	}
 }
 
@@ -174,20 +235,22 @@ func preferredSuccessCode(bt model.BehaviorType) int {
 }
 
 // compileRequestSchema compiles the request body schema, if present.
+// Returns the compiled schema and the error message (empty on success or
+// when no request body schema is defined).
 func compileRequestSchema(
 	op parser.Operation,
 	sc *compiler.SchemaCompiler,
 	logger *slog.Logger,
-) *model.CompiledSchema {
+) (*model.CompiledSchema, string) {
 	if op.RequestBody == nil || op.RequestBody.Schema == nil {
-		return nil
+		return nil, ""
 	}
 
 	ref := op.RequestBody.Schema
 
 	compiled, err := sc.Compile(ref.Pointer, ref.Name, ref.IsCircular)
 	if err != nil {
-		logger.Warn("failed to compile request schema",
+		logger.Warn("request schema failed to compile — request body validation will be skipped for this endpoint",
 			"operation", op.OperationID,
 			"method", op.Method,
 			"path", op.Path,
@@ -195,10 +258,35 @@ func compileRequestSchema(
 			"error", err,
 		)
 
-		return nil
+		return nil, err.Error()
 	}
 
-	return compiled
+	return compiled, ""
+}
+
+// responseSchemaResult collects compiled response schemas and any compilation
+// errors. Used by buildResponseSchemas to accumulate results without deep nesting.
+type responseSchemaResult struct {
+	schemas map[int]*model.CompiledSchema
+	errors  map[int]string
+}
+
+// set records a compiled schema (possibly nil) for a status code. If errMsg is
+// non-empty, it is recorded as a compilation error for that code.
+func (r *responseSchemaResult) set(code int, schema *model.CompiledSchema, errMsg string) {
+	if r.schemas == nil {
+		r.schemas = make(map[int]*model.CompiledSchema)
+	}
+
+	r.schemas[code] = schema
+
+	if errMsg != "" {
+		if r.errors == nil {
+			r.errors = make(map[int]string)
+		}
+
+		r.errors[code] = errMsg
+	}
 }
 
 // buildResponseSchemas builds the response schemas map from an operation's
@@ -207,47 +295,42 @@ func compileRequestSchema(
 // code exists" information). The default response uses key 0.
 // When sc is nil, schema compilation is skipped but status code presence
 // is still recorded.
+//
+// The second return value maps status codes to compilation error messages.
+// It is nil when all schemas compile successfully (zero allocation).
 func buildResponseSchemas(
 	op parser.Operation,
 	sc *compiler.SchemaCompiler,
 	logger *slog.Logger,
-) map[int]*model.CompiledSchema {
-	var schemas map[int]*model.CompiledSchema
+) (map[int]*model.CompiledSchema, map[int]string) {
+	var result responseSchemaResult
 
 	for code, resp := range op.Responses {
 		if resp == nil {
 			continue
 		}
 
-		if schemas == nil {
-			schemas = make(map[int]*model.CompiledSchema)
-		}
-
 		if resp.Schema == nil || sc == nil {
-			schemas[code] = nil
+			result.set(code, nil, "")
 
 			continue
 		}
 
-		compiled := compileSchema(sc, resp.Schema, op, logger)
-		schemas[code] = compiled
+		compiled, errMsg := compileSchema(sc, resp.Schema, op, logger)
+		result.set(code, compiled, errMsg)
 	}
 
-	// Default response at key 0 — same logic as the status-code loop above:
-	// key presence means "defined in spec," nil value means "no schema."
+	// Default response at key 0 — key presence means "defined in spec."
 	if op.DefaultResponse != nil {
-		if schemas == nil {
-			schemas = make(map[int]*model.CompiledSchema)
-		}
-
 		if op.DefaultResponse.Schema == nil || sc == nil {
-			schemas[0] = nil
+			result.set(0, nil, "")
 		} else {
-			schemas[0] = compileSchema(sc, op.DefaultResponse.Schema, op, logger)
+			compiled, errMsg := compileSchema(sc, op.DefaultResponse.Schema, op, logger)
+			result.set(0, compiled, errMsg)
 		}
 	}
 
-	return schemas
+	return result.schemas, result.errors
 }
 
 // buildResponseExamples collects media-type examples from an operation's
@@ -281,15 +364,16 @@ func buildResponseExamples(op parser.Operation) map[int]any {
 }
 
 // compileSchema compiles a single SchemaRef, logging a warning on failure.
+// Returns the compiled schema and the error message (empty on success).
 func compileSchema(
 	sc *compiler.SchemaCompiler,
 	ref *parser.SchemaRef,
 	op parser.Operation,
 	logger *slog.Logger,
-) *model.CompiledSchema {
+) (*model.CompiledSchema, string) {
 	compiled, err := sc.Compile(ref.Pointer, ref.Name, ref.IsCircular)
 	if err != nil {
-		logger.Warn("failed to compile response schema",
+		logger.Warn("response schema failed to compile — endpoint will return an error instead of generated data",
 			"operation", op.OperationID,
 			"method", op.Method,
 			"path", op.Path,
@@ -297,8 +381,8 @@ func compileSchema(
 			"error", err,
 		)
 
-		return nil
+		return nil, err.Error()
 	}
 
-	return compiled
+	return compiled, ""
 }

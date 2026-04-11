@@ -234,6 +234,11 @@ func runStart(args []string, out *os.File) int {
 		return 1
 	}
 
+	// Blank line separates slog warnings from the startup banner.
+	if result.FailedEntries > 0 || result.DegradedSchemas > 0 {
+		_, _ = fmt.Fprintln(out)
+	}
+
 	// Print startup summary after successful bind.
 	printStartupSummary(out, result, cfg.port, cfg.strict)
 
@@ -292,6 +297,23 @@ func printStartupSummary(out *os.File, result *server.StartupResult, port int, s
 	_, _ = fmt.Fprintf(out, "🎭 mimikos %s\n", version)
 	_, _ = fmt.Fprintf(out, "Spec: %s (OpenAPI %s)\n", result.SpecTitle, result.SpecVersion)
 	_, _ = fmt.Fprintf(out, "Operations: %d endpoints classified\n", result.Operations)
+
+	if result.FailedEntries > 0 {
+		_, _ = fmt.Fprintf(out, "⚠ %d endpoint(s) failed to register:\n", result.FailedEntries)
+
+		for _, p := range result.FailedPaths {
+			_, _ = fmt.Fprintf(out, "    %s\n", p)
+		}
+	}
+
+	if result.DegradedSchemas > 0 {
+		_, _ = fmt.Fprintf(out, "⚠ %d endpoint(s) have degraded schemas:\n", result.DegradedSchemas)
+
+		for _, p := range result.DegradedPaths {
+			_, _ = fmt.Fprintf(out, "    %s\n", p)
+		}
+	}
+
 	_, _ = fmt.Fprintln(out)
 
 	if len(result.Entries) > 0 {

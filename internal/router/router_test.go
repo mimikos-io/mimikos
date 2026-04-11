@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/mimikos-io/mimikos/internal/builder"
 	merrors "github.com/mimikos-io/mimikos/internal/errors"
 	"github.com/mimikos-io/mimikos/internal/generator"
 	"github.com/mimikos-io/mimikos/internal/model"
@@ -132,7 +133,7 @@ func newTestHandler(v validator.RequestValidator) *Handler {
 	resp := merrors.NewResponder()
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
 
-	return NewHandler(testBehaviorMap(), v, resp, gen, false, nil, model.ModeDeterministic, nil)
+	return NewHandler(testBehaviorMap(), nil, v, resp, gen, false, nil, model.ModeDeterministic, nil)
 }
 
 // parseProblemDetail decodes an RFC 7807 response body.
@@ -429,7 +430,7 @@ func TestHandler_NilSchemaReturnsEmptyObject(t *testing.T) {
 
 	resp := merrors.NewResponder()
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
-	h := NewHandler(bm, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+	h := NewHandler(bm, nil, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/empty", nil)
 	rec := httptest.NewRecorder()
@@ -448,7 +449,7 @@ func TestHandler_NilSchemaReturnsEmptyObject(t *testing.T) {
 
 // conflictingPathsBehaviorMap creates a BehaviorMap where a literal path
 // (/items/shared) is a sibling of a wildcard path (/items/{id}).
-// Go 1.22+ ServeMux panics on this if routes are registered naively.
+// Kept as a regression guard for correct literal-vs-wildcard precedence.
 func conflictingPathsBehaviorMap() *model.BehaviorMap {
 	bm := model.NewBehaviorMap()
 
@@ -495,12 +496,13 @@ func conflictingPathsBehaviorMap() *model.BehaviorMap {
 func newConflictingHandler() *Handler {
 	resp := merrors.NewResponder()
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
+	bm := conflictingPathsBehaviorMap()
 
-	return NewHandler(conflictingPathsBehaviorMap(), &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+	return NewHandler(bm, nil, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
 }
 
 func TestHandler_LiteralWildcardSibling_NoPanic(t *testing.T) {
-	// Must not panic when registering routes for specs with literal/wildcard siblings.
+	// Regression guard: literal/wildcard sibling routes must register without panic.
 	assert.NotPanics(t, func() {
 		newConflictingHandler()
 	})
@@ -579,7 +581,7 @@ func TestHandler_ExampleResponse_ReturnsExampleBody(t *testing.T) {
 
 	resp := merrors.NewResponder()
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
-	h := NewHandler(bm, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+	h := NewHandler(bm, nil, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/pets/1", nil)
 	rec := httptest.NewRecorder()
@@ -613,7 +615,7 @@ func TestHandler_NoExample_FallsThroughToGeneration(t *testing.T) {
 
 	resp := merrors.NewResponder()
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
-	h := NewHandler(bm, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+	h := NewHandler(bm, nil, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/pets/1", nil)
 	rec := httptest.NewRecorder()
@@ -647,7 +649,7 @@ func TestHandler_ExampleResponse_204NoContent_NeverReturnsBody(t *testing.T) {
 
 	resp := merrors.NewResponder()
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
-	h := NewHandler(bm, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+	h := NewHandler(bm, nil, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/pets/1", nil)
 	rec := httptest.NewRecorder()
@@ -676,7 +678,7 @@ func TestHandler_RequiredBodyMissing_Returns400(t *testing.T) {
 
 	resp := merrors.NewResponder()
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
-	h := NewHandler(bm, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+	h := NewHandler(bm, nil, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/pets", nil)
 	rec := httptest.NewRecorder()
@@ -714,7 +716,7 @@ func TestHandler_RequiredBodyPresent_Succeeds(t *testing.T) {
 
 	resp := merrors.NewResponder()
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
-	h := NewHandler(bm, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+	h := NewHandler(bm, nil, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/pets",
 		strings.NewReader(`{"name":"Fido"}`))
@@ -736,6 +738,133 @@ func TestHandler_OptionalBodyMissing_Succeeds(t *testing.T) {
 	h.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusCreated, rec.Code)
+}
+
+// --- Panic recovery middleware tests (Task 27) ---
+
+func TestHandler_Recoverer_PanicReturnsRFC7807(t *testing.T) {
+	bm := model.NewBehaviorMap()
+	bm.Put(model.BehaviorEntry{
+		Method:      http.MethodGet,
+		PathPattern: "/panic",
+		Type:        model.BehaviorFetch,
+		SuccessCode: http.StatusOK,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusOK: {Name: "Test", Schema: petObjectSchema()},
+		},
+		Source:     model.SourceHeuristic,
+		Confidence: 0.9,
+	})
+
+	resp := merrors.NewResponder()
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
+
+	// Build handler, then replace the route with one that panics.
+	// We can't inject a panicking handler through NewHandler directly,
+	// so we use chi's route replacement by registering after construction.
+	// Instead, test the middleware by creating a handler that will panic
+	// at request time due to a nil schema dereference path.
+	// Actually, let's test the recoverer directly via the middleware chain.
+	h := NewHandler(bm, nil, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+
+	// Override the route with a panicking handler to test the middleware.
+	h.router.Get("/boom", func(_ http.ResponseWriter, _ *http.Request) {
+		panic("test panic in handler")
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/boom", nil)
+	rec := httptest.NewRecorder()
+
+	// Must not panic — recoverer catches it.
+	assert.NotPanics(t, func() {
+		h.ServeHTTP(rec, req)
+	})
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	pd := parseProblemDetail(t, rec.Body.Bytes())
+	assert.Equal(t, "Internal Server Error", pd["title"])
+	assert.Contains(t, pd["detail"], "test panic in handler")
+	assert.Contains(t, pd["detail"], "GET /boom")
+}
+
+func TestHandler_Recoverer_NormalRequestUnaffected(t *testing.T) {
+	h := newTestHandler(&stubValidator{})
+
+	req := httptest.NewRequest(http.MethodGet, "/pets/42", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	//nolint:testifylint // header string, not JSON
+	assert.Equal(t, contentTypeJSON, rec.Header().Get("Content-Type"))
+}
+
+// --- Failed entry placeholder tests (Task 27) ---
+
+func TestHandler_FailedEntry_ReturnsRFC7807(t *testing.T) {
+	bm := model.NewBehaviorMap()
+	bm.Put(model.BehaviorEntry{
+		Method:      http.MethodGet,
+		PathPattern: "/pets",
+		Type:        model.BehaviorList,
+		SuccessCode: http.StatusOK,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusOK: {Name: "PetList", Schema: petArraySchema()},
+		},
+		Source:     model.SourceHeuristic,
+		Confidence: 0.9,
+	})
+
+	failed := []builder.FailedEntry{
+		{Method: http.MethodGet, PathPattern: "/dogs/{dogId}", Error: "nil pointer dereference"},
+	}
+
+	resp := merrors.NewResponder()
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
+	h := NewHandler(bm, failed, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+
+	// Request to failed endpoint → actionable 500.
+	req := httptest.NewRequest(http.MethodGet, "/dogs/123", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	pd := parseProblemDetail(t, rec.Body.Bytes())
+	assert.Equal(t, "Internal Server Error", pd["title"])
+	assert.Contains(t, pd["detail"], "failed to register at startup")
+	assert.Contains(t, pd["detail"], "nil pointer dereference")
+}
+
+func TestHandler_FailedEntry_SuccessfulRoutesUnaffected(t *testing.T) {
+	bm := model.NewBehaviorMap()
+	bm.Put(model.BehaviorEntry{
+		Method:      http.MethodGet,
+		PathPattern: "/pets",
+		Type:        model.BehaviorList,
+		SuccessCode: http.StatusOK,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusOK: {Name: "PetList", Schema: petArraySchema()},
+		},
+		Source:     model.SourceHeuristic,
+		Confidence: 0.9,
+	})
+
+	failed := []builder.FailedEntry{
+		{Method: http.MethodGet, PathPattern: "/dogs/{dogId}", Error: "nil pointer dereference"},
+	}
+
+	resp := merrors.NewResponder()
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
+	h := NewHandler(bm, failed, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+
+	// Request to successful endpoint → normal response.
+	req := httptest.NewRequest(http.MethodGet, "/pets", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
 // --- isJSONContentType unit tests (NB2) ---
@@ -766,4 +895,211 @@ func TestIsJSONContentType(t *testing.T) {
 			assert.Equal(t, tt.want, isJSONContentType(tt.ct))
 		})
 	}
+}
+
+// --- Degraded schema tests ---
+
+func TestHandler_DegradedResponseSchema_ReturnsRFC7807(t *testing.T) {
+	bm := model.NewBehaviorMap()
+	bm.Put(model.BehaviorEntry{
+		Method:      http.MethodPost,
+		PathPattern: "/reports",
+		Type:        model.BehaviorCreate,
+		SuccessCode: http.StatusCreated,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusCreated: nil, // schema failed to compile
+		},
+		Source:                 model.SourceHeuristic,
+		Confidence:             0.9,
+		DegradedResponseSchema: "compiler: schema compilation failed: 'examples' got object, want array",
+	})
+
+	resp := merrors.NewResponder()
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
+	h := NewHandler(bm, nil, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/reports",
+		strings.NewReader(`{"startDate": "2024-01-01"}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+
+	pd := parseProblemDetail(t, rec.Body.Bytes())
+	assert.InDelta(t, http.StatusInternalServerError, pd["status"], 0)
+	assert.Contains(t, pd["detail"], "schema failed to compile")
+}
+
+func TestHandler_DegradedResponseSchema_WithExample_ServesExample(t *testing.T) {
+	// When a degraded endpoint has a media-type example, serve it instead
+	// of returning RFC 7807. The example doesn't need a compiled schema.
+	exampleData := map[string]any{"id": float64(1), "status": "pending"}
+
+	bm := model.NewBehaviorMap()
+	bm.Put(model.BehaviorEntry{
+		Method:      http.MethodPost,
+		PathPattern: "/reports",
+		Type:        model.BehaviorCreate,
+		SuccessCode: http.StatusCreated,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusCreated: nil, // schema failed
+		},
+		ResponseExamples: map[int]any{
+			http.StatusCreated: exampleData,
+		},
+		Source:                 model.SourceHeuristic,
+		Confidence:             0.9,
+		DegradedResponseSchema: "compiler: schema compilation failed",
+	})
+
+	resp := merrors.NewResponder()
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
+	h := NewHandler(bm, nil, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/reports",
+		strings.NewReader(`{"startDate": "2024-01-01"}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	// Should serve the example, not RFC 7807.
+	assert.Equal(t, http.StatusCreated, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "pending", body["status"])
+}
+
+func TestHandler_DegradedRequestSchema_StrictMode_ReturnsRFC7807(t *testing.T) {
+	bm := model.NewBehaviorMap()
+	bm.Put(model.BehaviorEntry{
+		Method:      http.MethodPost,
+		PathPattern: "/reports",
+		Type:        model.BehaviorCreate,
+		SuccessCode: http.StatusCreated,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusCreated: {Name: "Report", Schema: petObjectSchema()},
+		},
+		Source:                model.SourceHeuristic,
+		Confidence:            0.9,
+		DegradedRequestSchema: "compiler: schema compilation failed",
+		BodyRequired:          true,
+	})
+
+	resp := merrors.NewResponder()
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
+	// strict=true
+	h := NewHandler(bm, nil, &stubValidator{}, resp, gen, true, nil, model.ModeDeterministic, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/reports",
+		strings.NewReader(`{"startDate": "2024-01-01"}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+
+	pd := parseProblemDetail(t, rec.Body.Bytes())
+	assert.Contains(t, pd["detail"], "schema failed to compile")
+}
+
+func TestHandler_DegradedRequestSchema_NonStrict_Works(t *testing.T) {
+	bm := model.NewBehaviorMap()
+	bm.Put(model.BehaviorEntry{
+		Method:      http.MethodPost,
+		PathPattern: "/reports",
+		Type:        model.BehaviorCreate,
+		SuccessCode: http.StatusCreated,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusCreated: {Name: "Report", Schema: petObjectSchema()},
+		},
+		Source:                model.SourceHeuristic,
+		Confidence:            0.9,
+		DegradedRequestSchema: "compiler: schema compilation failed",
+	})
+
+	resp := merrors.NewResponder()
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
+	// strict=false
+	h := NewHandler(bm, nil, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/reports",
+		strings.NewReader(`{"startDate": "2024-01-01"}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	// Should work normally — non-strict skips the degradation check.
+	assert.Equal(t, http.StatusCreated, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+}
+
+func TestHandler_DegradedRequestSchema_StrictMode_GET_Works(t *testing.T) {
+	// GET has no body — request schema degradation should not affect it.
+	bm := model.NewBehaviorMap()
+	bm.Put(model.BehaviorEntry{
+		Method:      http.MethodGet,
+		PathPattern: "/reports",
+		Type:        model.BehaviorList,
+		SuccessCode: http.StatusOK,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusOK: {Name: "ReportList", Schema: petArraySchema()},
+		},
+		Source:                model.SourceHeuristic,
+		Confidence:            0.9,
+		DegradedRequestSchema: "compiler: schema compilation failed",
+	})
+
+	resp := merrors.NewResponder()
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
+	// strict=true, but GET has no body.
+	h := NewHandler(bm, nil, &stubValidator{}, resp, gen, true, nil, model.ModeDeterministic, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/reports", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestHandler_DegradedResponseSchema_NonSuccessCode_Works(t *testing.T) {
+	// Degradation is tracked for the success code. Requesting a non-degraded
+	// error code via X-Mimikos-Status should still work.
+	bm := model.NewBehaviorMap()
+	bm.Put(model.BehaviorEntry{
+		Method:      http.MethodPost,
+		PathPattern: "/reports",
+		Type:        model.BehaviorCreate,
+		SuccessCode: http.StatusCreated,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusCreated:    nil, // degraded
+			http.StatusBadRequest: nil, // error fallback, not degraded
+		},
+		Source:                 model.SourceHeuristic,
+		Confidence:             0.9,
+		DegradedResponseSchema: "compiler: schema compilation failed",
+	})
+
+	resp := merrors.NewResponder()
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
+	h := NewHandler(bm, nil, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/reports",
+		strings.NewReader(`{"startDate": "2024-01-01"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Mimikos-Status", "400")
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	// Should return the error fallback, not the degradation error.
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }

@@ -86,7 +86,7 @@ func newScenarioTestHandler() *Handler {
 	resp := merrors.NewResponder()
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
 
-	return NewHandler(scenarioBehaviorMap(), &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+	return NewHandler(scenarioBehaviorMap(), nil, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
 }
 
 func TestHandler_ExplicitStatus404_WithSchema(t *testing.T) {

@@ -5,13 +5,16 @@ import (
 	"net/http"
 	"regexp"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/mimikos-io/mimikos/internal/generator"
 	"github.com/mimikos-io/mimikos/internal/model"
 	"github.com/mimikos-io/mimikos/internal/state"
 )
 
-// paramPattern matches path parameter segments like {petId}.
-var paramPattern = regexp.MustCompile(`\{(\w+)\}`)
+// paramPattern matches path parameter segments like {petId} or {enterprise-team}.
+// Uses [^}]+ instead of \w+ to support hyphens and dots in OpenAPI parameter names.
+var paramPattern = regexp.MustCompile(`\{([^}]+)\}`)
 
 // handleStatefulMode processes a request in stateful mode. Returns true if the
 // request was handled (response written), false if it should fall through
@@ -25,6 +28,19 @@ func (h *Handler) handleStatefulMode(
 	gen *generator.DataGenerator,
 	body []byte,
 ) bool {
+	// Response schema degraded: behaviors that generate from schema (create,
+	// list, non-204 delete) cannot function without a compiled schema. Block
+	// with RFC 7807 — unless a media-type example provides a fallback.
+	if entry.DegradedResponseSchema != "" {
+		if isDegradedStateful(entry) {
+			writeProblem(w, http.StatusInternalServerError,
+				"Response generation unavailable — schema failed to compile at startup: "+
+					entry.DegradedResponseSchema)
+
+			return true
+		}
+	}
+
 	switch entry.Type {
 	case model.BehaviorCreate:
 		h.handleCreate(w, r, entry, gen, body)
@@ -264,6 +280,32 @@ func (h *Handler) handleDelete(
 	writeJSON(w, entry.SuccessCode, responseBody)
 }
 
+// isDegradedStateful returns true if a stateful behavior cannot function due to
+// response schema degradation. Create and list always need a schema for
+// generation. Delete needs one only for non-204 responses. Fetch and update
+// use stored data, not the schema, so they are never degraded.
+func isDegradedStateful(entry model.BehaviorEntry) bool {
+	scenario := selectSuccess(&entry)
+
+	// Media-type example available — can serve without a schema.
+	if scenario.Example != nil {
+		return false
+	}
+
+	switch entry.Type {
+	case model.BehaviorCreate, model.BehaviorList:
+		return true
+	case model.BehaviorDelete:
+		return entry.SuccessCode != http.StatusNoContent
+	case model.BehaviorFetch, model.BehaviorUpdate, model.BehaviorGeneric:
+		// Fetch/update use stored data, not the schema. Generic falls through
+		// to deterministic mode. None are degraded by schema compilation failure.
+		return false
+	}
+
+	return false
+}
+
 // unwrapResource extracts the inner resource from a potentially wrapped body.
 // If wrapperKey is empty (flat response), returns body unchanged.
 // If wrapperKey is set, returns body[wrapperKey] if it's a map, or body unchanged.
@@ -333,15 +375,15 @@ func parseRequestBody(body []byte, wrapperKey string) (map[string]any, error) {
 	return innerMap, nil
 }
 
-// extractPathParams reads path parameter values from the request using Go 1.22+
-// ServeMux wildcards. Returns a map of param name → value.
+// extractPathParams reads path parameter values from the request using chi's
+// URL parameter extraction. Returns a map of param name → value.
 func extractPathParams(r *http.Request, pathPattern string) map[string]string {
 	matches := paramPattern.FindAllStringSubmatch(pathPattern, -1)
 	params := make(map[string]string, len(matches))
 
 	for _, m := range matches {
 		name := m[1]
-		if val := r.PathValue(name); val != "" {
+		if val := chi.URLParam(r, name); val != "" {
 			params[name] = val
 		}
 	}

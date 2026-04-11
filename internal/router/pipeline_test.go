@@ -86,7 +86,7 @@ func newPipelineHandler(v *stubValidator) *Handler {
 	resp := merrors.NewResponder()
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
 
-	return NewHandler(pipelineBehaviorMap(), v, resp, gen, false, nil, model.ModeDeterministic, nil)
+	return NewHandler(pipelineBehaviorMap(), nil, v, resp, gen, false, nil, model.ModeDeterministic, nil)
 }
 
 // --- Pipeline integration tests ---
@@ -237,7 +237,7 @@ func TestPipeline_Delete404_RFC7807Fallback(t *testing.T) {
 func BenchmarkPipeline_GetItem(b *testing.B) {
 	resp := merrors.NewResponder()
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
-	h := NewHandler(pipelineBehaviorMap(), &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+	h := NewHandler(pipelineBehaviorMap(), nil, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
 
 	b.ResetTimer()
 
@@ -251,7 +251,7 @@ func BenchmarkPipeline_GetItem(b *testing.B) {
 func BenchmarkPipeline_PostCreate(b *testing.B) {
 	resp := merrors.NewResponder()
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
-	h := NewHandler(pipelineBehaviorMap(), &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+	h := NewHandler(pipelineBehaviorMap(), nil, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
 
 	body := `{"name":"Fido"}`
 
@@ -270,7 +270,7 @@ func BenchmarkPipeline_PostCreate(b *testing.B) {
 func BenchmarkPipeline_GetCollection(b *testing.B) {
 	resp := merrors.NewResponder()
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
-	h := NewHandler(pipelineBehaviorMap(), &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+	h := NewHandler(pipelineBehaviorMap(), nil, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
 
 	b.ResetTimer()
 

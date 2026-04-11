@@ -71,6 +71,21 @@ type (
 		// Key 0 represents the default response example.
 		// Nil map means no media-type examples were defined.
 		ResponseExamples map[int]any
+
+		// DegradedResponseSchema records the compilation error for the success
+		// code's response schema. Non-empty means the endpoint cannot generate
+		// a meaningful response body — the router returns RFC 7807 instead of
+		// empty data. Empty string means the response schema compiled
+		// successfully (or no response schema was defined).
+		DegradedResponseSchema string
+
+		// DegradedRequestSchema records the compilation error for the request
+		// body schema. Non-empty means the endpoint cannot validate request
+		// bodies. In strict mode, the router rejects requests with bodies.
+		// In non-strict mode, request validation is skipped but the endpoint
+		// still serves responses. Empty string means the request schema
+		// compiled successfully (or no request body schema was defined).
+		DegradedRequestSchema string
 	}
 )
 

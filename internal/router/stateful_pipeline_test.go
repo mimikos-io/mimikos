@@ -103,7 +103,7 @@ func newStatefulPipelineHandler(store state.Store) *Handler {
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
 
 	return NewHandler(
-		statefulPipelineBehaviorMap(), &stubValidator{}, resp, gen,
+		statefulPipelineBehaviorMap(), nil, &stubValidator{}, resp, gen,
 		false, nil, model.ModeStateful, store,
 	)
 }
@@ -276,7 +276,7 @@ func TestStatefulPipeline_ValidationRunsInStatefulMode(t *testing.T) {
 	}
 
 	h := NewHandler(
-		statefulPipelineBehaviorMap(), v, resp, gen,
+		statefulPipelineBehaviorMap(), nil, v, resp, gen,
 		false, nil, model.ModeStateful, store,
 	)
 
@@ -349,7 +349,7 @@ func BenchmarkStatefulPipeline_GetFetch(b *testing.B) {
 	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
 
 	h := NewHandler(
-		statefulPipelineBehaviorMap(), &stubValidator{}, resp, gen,
+		statefulPipelineBehaviorMap(), nil, &stubValidator{}, resp, gen,
 		false, nil, model.ModeStateful, store,
 	)
 
