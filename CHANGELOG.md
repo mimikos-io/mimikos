@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2026-04-11
+
+### Changed
+
+#### Router: ServeMux replaced with chi
+- Replaced Go's `net/http.ServeMux` with [chi](https://github.com/go-chi/chi) for HTTP routing
+- Removed ~35 lines of workaround code for ServeMux's panic on literal/wildcard sibling paths
+- 404 and 405 responses are now handled by chi's native `NotFound` and `MethodNotAllowed` handlers
+- No behavioral changes — all existing routes, responses, and error formats are identical
+
+### Added
+
+#### Graceful panic recovery
+- Endpoints that panic during startup are now skipped instead of crashing the server — the server starts with the remaining endpoints and logs warnings for each failure
+- Requests to failed endpoints return an actionable RFC 7807 error: `"This endpoint failed to register at startup: <error>"`
+- Runtime panics in any handler are caught by recovery middleware and return RFC 7807 500 responses instead of dropping the connection
+- Startup banner shows failed endpoint count when > 0
+
+#### Degraded schema handling
+- Endpoints whose response schema fails to compile at startup now return an actionable RFC 7807 error instead of silently returning `{}`
+- Error detail includes the schema name and compilation error so the developer knows exactly what to fix in their spec
+- In strict mode (`--strict`), endpoints with failed request schemas also return RFC 7807 for body-bearing methods (POST/PUT/PATCH)
+- In non-strict mode, request schema failures are tolerated — the endpoint works but skips request body validation
+- Media-type examples bypass degradation — if the spec defines an example for the response, it is served even when the schema failed to compile
+- Startup banner shows degraded schema count when > 0
+- Builder warning messages now describe the impact: response schema failures say "endpoint will return an error", request schema failures say "validation will be skipped"
+
 ## [0.3.3] - 2026-04-10
 
 ### Fixed

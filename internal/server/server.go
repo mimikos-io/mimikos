@@ -58,11 +58,15 @@ func (d discardHandler) WithGroup(string) slog.Handler           { return d }
 // StartupResult carries diagnostic info produced during server assembly
 // for CLI startup logging.
 type StartupResult struct {
-	SpecTitle   string
-	SpecVersion string
-	Operations  int
-	Entries     []EntryInfo
-	Mode        model.OperatingMode
+	SpecTitle       string
+	SpecVersion     string
+	Operations      int
+	FailedEntries   int
+	FailedPaths     []string // "METHOD /path" for each failed endpoint
+	DegradedSchemas int
+	DegradedPaths   []string // "METHOD /path" for each degraded endpoint
+	Entries         []EntryInfo
+	Mode            model.OperatingMode
 }
 
 // EntryInfo holds per-operation info for startup logging.
@@ -101,9 +105,17 @@ func Build(ctx context.Context, specBytes []byte, cfg Config) (http.Handler, *St
 
 	classify := classifier.New()
 
-	bm, err := builder.BuildBehaviorMap(spec, classify, sc, logger)
+	bm, failed, err := builder.BuildBehaviorMap(spec, classify, sc, logger)
 	if err != nil {
 		return nil, nil, fmt.Errorf("build behavior map: %w", err)
+	}
+
+	for _, f := range failed {
+		logger.Warn("endpoint not registered — panicked during startup",
+			"method", f.Method,
+			"path", f.PathPattern,
+			"error", f.Error,
+		)
 	}
 
 	// Annotate stateful metadata (wrapper keys, list array keys, ID field hints)
@@ -140,14 +152,21 @@ func Build(ctx context.Context, specBytes []byte, cfg Config) (http.Handler, *St
 	}
 
 	// Wire router.
-	handler := router.NewHandler(bm, v, responder, gen, cfg.Strict, logger, mode, store)
+	handler := router.NewHandler(bm, failed, v, responder, gen, cfg.Strict, logger, mode, store)
 
-	return handler, buildStartupResult(spec, bm, mode), nil
+	return handler, buildStartupResult(spec, bm, failed, mode), nil
 }
 
 // buildStartupResult collects diagnostic info from the startup pipeline.
-func buildStartupResult(spec *parser.ParsedSpec, bm *model.BehaviorMap, mode model.OperatingMode) *StartupResult {
+func buildStartupResult(
+	spec *parser.ParsedSpec,
+	bm *model.BehaviorMap,
+	failed []builder.FailedEntry,
+	mode model.OperatingMode,
+) *StartupResult {
 	entries := make([]EntryInfo, 0, bm.Len())
+
+	var degradedPaths []string
 
 	for _, e := range bm.Entries() {
 		entries = append(entries, EntryInfo{
@@ -156,13 +175,26 @@ func buildStartupResult(spec *parser.ParsedSpec, bm *model.BehaviorMap, mode mod
 			BehaviorType: e.Type.String(),
 			Confidence:   classifier.ConfidenceLabel(e.Confidence),
 		})
+
+		if e.DegradedResponseSchema != "" || e.DegradedRequestSchema != "" {
+			degradedPaths = append(degradedPaths, e.Method+" "+e.PathPattern)
+		}
+	}
+
+	failedPaths := make([]string, len(failed))
+	for i, f := range failed {
+		failedPaths[i] = f.Method + " " + f.PathPattern
 	}
 
 	return &StartupResult{
-		SpecTitle:   spec.Title,
-		SpecVersion: spec.Version,
-		Operations:  bm.Len(),
-		Entries:     entries,
-		Mode:        mode,
+		SpecTitle:       spec.Title,
+		SpecVersion:     spec.Version,
+		Operations:      bm.Len(),
+		FailedEntries:   len(failed),
+		FailedPaths:     failedPaths,
+		DegradedSchemas: len(degradedPaths),
+		DegradedPaths:   degradedPaths,
+		Entries:         entries,
+		Mode:            mode,
 	}
 }

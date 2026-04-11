@@ -1,7 +1,7 @@
 // Package router implements the HTTP router and scenario router for Mimikos.
-// The HTTP router matches incoming requests to OpenAPI operations using
-// net/http ServeMux (Go 1.22+). The scenario router selects the appropriate
-// response scenario based on the behavior map and request validity.
+// The HTTP router matches incoming requests to OpenAPI operations using chi.
+// The scenario router selects the appropriate response scenario based on the
+// behavior map and request validity.
 package router
 
 import (
@@ -9,12 +9,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
-	"sort"
+	"runtime/debug"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
+
+	"github.com/mimikos-io/mimikos/internal/builder"
 	merrors "github.com/mimikos-io/mimikos/internal/errors"
 	"github.com/mimikos-io/mimikos/internal/generator"
 	"github.com/mimikos-io/mimikos/internal/model"
@@ -22,23 +26,22 @@ import (
 	"github.com/mimikos-io/mimikos/internal/validator"
 )
 
-// maxBodySize is the maximum allowed request body size (10 MB).
-const maxBodySize = 10 * 1024 * 1024
+const (
+	// maxBodySize is the maximum allowed request body size (10 MB).
+	maxBodySize = 10 * 1024 * 1024
 
-// contentTypeJSON is the standard JSON content type.
-const contentTypeJSON = "application/json"
+	// contentTypeJSON is the standard JSON content type.
+	contentTypeJSON = "application/json"
+)
 
-// methodsFor405 lists HTTP methods for which we register explicit 405 handlers
-// when a path does not define them. This avoids method-less catch-all patterns
-// that conflict with Go 1.22+ ServeMux's strict overlap detection.
-//
-// HEAD is excluded: ServeMux implicitly routes HEAD to GET handlers, so
-// registering HEAD 405 handlers creates cross-path conflicts when a literal
-// sibling has GET defined (e.g. HEAD /items/{id} vs GET /items/shared).
+// httpMethods lists the HTTP methods checked when building the Allow header
+// for 405 responses. HEAD is included because chi implicitly routes HEAD
+// to GET handlers.
 //
 //nolint:gochecknoglobals
-var methodsFor405 = []string{
+var httpMethods = []string{
 	http.MethodGet,
+	http.MethodHead,
 	http.MethodPost,
 	http.MethodPut,
 	http.MethodPatch,
@@ -49,7 +52,7 @@ type (
 	// Handler serves mock HTTP responses by matching requests to OpenAPI
 	// operations and orchestrating the runtime pipeline.
 	Handler struct {
-		mux       *http.ServeMux
+		router    chi.Router
 		responder merrors.Responder
 		logger    *slog.Logger
 		strict    bool
@@ -61,6 +64,11 @@ type (
 	discardHandler struct{}
 )
 
+func (discardHandler) Enabled(context.Context, slog.Level) bool  { return false }
+func (discardHandler) Handle(context.Context, slog.Record) error { return nil }
+func (d discardHandler) WithAttrs([]slog.Attr) slog.Handler      { return d }
+func (d discardHandler) WithGroup(string) slog.Handler           { return d }
+
 // NewHandler creates a Handler that routes requests based on the given
 // BehaviorMap. All dependencies are injected: validator for request
 // validation, responder for error responses, generator for response data.
@@ -68,9 +76,15 @@ type (
 // logging a warning and sending the response anyway.
 // In stateful mode, the handler consults the Store for CRUD state management.
 // The store must be nil when mode is deterministic.
+//
+// Failed entries are operations that panicked during the startup pipeline.
+// Each gets a placeholder handler that returns an actionable RFC 7807 error
+// instead of falling through to 404.
+//
 // If logger is nil, a no-op logger is used.
 func NewHandler(
 	behaviorMap *model.BehaviorMap,
+	failed []builder.FailedEntry,
 	v validator.RequestValidator,
 	responder merrors.Responder,
 	gen *generator.DataGenerator,
@@ -83,64 +97,77 @@ func NewHandler(
 		logger = slog.New(discardHandler{})
 	}
 
-	mux := http.NewServeMux()
-	h := &Handler{mux: mux, responder: responder, logger: logger, strict: strict, mode: mode, store: store}
+	r := chi.NewRouter()
+	h := &Handler{router: r, responder: responder, logger: logger, strict: strict, mode: mode, store: store}
 
-	// Collect entries by path pattern for 405 handling.
-	methodsByPath := make(map[string][]string)
+	r.Use(h.recoverer) // catch panics in handlers → RFC 7807 500
 
 	for _, entry := range behaviorMap.Entries() {
-		pattern := entry.Method + " " + entry.PathPattern
-		mux.HandleFunc(pattern, h.operationHandler(entry, v, gen))
-		methodsByPath[entry.PathPattern] = append(methodsByPath[entry.PathPattern], entry.Method)
+		r.MethodFunc(entry.Method, entry.PathPattern, h.operationHandler(entry, v, gen))
 	}
 
-	// Register per-method 405 handlers for undefined methods on each path.
-	// We cannot use a method-less catch-all pattern because Go 1.22+ ServeMux
-	// panics when a method-less literal path (e.g. /items/shared) overlaps
-	// with a method-specific wildcard (e.g. PUT /items/{id}) — the literal is
-	// more specific in path but broader in methods, which ServeMux considers
-	// ambiguous. Registering explicit method-specific 405 handlers avoids this.
-	for pathPattern, methods := range methodsByPath {
-		sort.Strings(methods)
-
-		defined := make(map[string]bool, len(methods))
-		for _, m := range methods {
-			defined[m] = true
-		}
-
-		allowedMethods := methods // capture for closure
-
-		for _, m := range methodsFor405 {
-			if defined[m] {
-				continue
-			}
-
-			pattern := m + " " + pathPattern
-
-			mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-				responder.MethodNotAllowed(w, r.Method, r.URL.Path, allowedMethods)
-			})
-		}
+	// Register placeholder handlers for entries that panicked at startup.
+	// Without this, failed endpoints fall through to 404, misleading the
+	// developer into thinking their spec path is wrong.
+	for _, f := range failed {
+		detail := fmt.Sprintf(
+			"This endpoint failed to register at startup: %s. Check the startup log for details.",
+			f.Error,
+		)
+		r.MethodFunc(f.Method, f.PathPattern, func(w http.ResponseWriter, _ *http.Request) {
+			writeProblem(w, http.StatusInternalServerError, detail)
+		})
 	}
 
-	// Default catch-all: any request that doesn't match a registered path
-	// gets an RFC 7807 404. This replaces the two-step Handler()+ServeHTTP()
-	// approach so the mux's ServeHTTP sets path values on the request.
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		responder.NotFound(w, r.Method, r.URL.Path)
+	})
+
+	r.MethodNotAllowed(func(w http.ResponseWriter, req *http.Request) {
+		responder.MethodNotAllowed(w, req.Method, req.URL.Path, allowedMethods(r, req.URL.Path))
 	})
 
 	return h
 }
 
-// ServeHTTP implements http.Handler. Delegates directly to the internal
-// ServeMux so that Go 1.22+ path values ({petId}, etc.) are populated on
-// the request before handlers run. Unmatched routes fall through to the
-// "/" catch-all which returns RFC 7807 404. Method-not-allowed cases are
-// handled by the method-less catch-all handlers registered per path pattern.
+// ServeHTTP implements http.Handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.mux.ServeHTTP(w, r)
+	h.router.ServeHTTP(w, r)
+}
+
+// recoverer is chi middleware that catches panics in handlers and returns
+// an RFC 7807 500 response instead of crashing the connection.
+func (h *Handler) recoverer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				h.logger.Error("handler panic recovered",
+					"method", r.Method,
+					"path", r.URL.Path,
+					"error", rec,
+					"stack", string(debug.Stack()),
+				)
+				writeProblem(w, http.StatusInternalServerError,
+					fmt.Sprintf("Unexpected error processing %s %s: %v", r.Method, r.URL.Path, rec))
+			}
+		}()
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// allowedMethods returns the HTTP methods that the router can serve for
+// the given path. Used to populate the Allow header on 405 responses.
+func allowedMethods(r chi.Router, path string) []string {
+	var methods []string
+
+	for _, method := range httpMethods {
+		if r.Match(chi.NewRouteContext(), method, path) {
+			methods = append(methods, method)
+		}
+	}
+
+	return methods
 }
 
 // operationHandler returns an http.HandlerFunc for a single BehaviorEntry.
@@ -152,6 +179,16 @@ func (h *Handler) operationHandler(
 	gen *generator.DataGenerator,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Strict mode: request schema degradation blocks body-bearing methods.
+		// The developer opted into correctness, but we cannot validate.
+		if h.strict && entry.DegradedRequestSchema != "" && hasBody(r.Method) {
+			writeProblem(w, http.StatusInternalServerError,
+				"Request body validation unavailable — schema failed to compile at startup: "+
+					entry.DegradedRequestSchema)
+
+			return
+		}
+
 		// validateRequest MUST run before the mode branch below. Stateful
 		// handlers (handleCreate, handleUpdate) assume a valid body —
 		// parseRequestBody silently treats an empty body as {}, which would
@@ -191,6 +228,18 @@ func (h *Handler) handleDeterministicMode(
 	scenario, err := SelectScenario(&entry, requestedStatus)
 	if err != nil {
 		h.responder.InvalidScenario(w, err.Error())
+
+		return
+	}
+
+	// Response schema degraded: the spec defined a schema for this status code
+	// but it failed to compile at startup. Return RFC 7807 instead of empty data
+	// — unless a media-type example can fill in (checked below).
+	if entry.DegradedResponseSchema != "" && scenario.StatusCode == entry.SuccessCode &&
+		scenario.Schema == nil && scenario.Example == nil {
+		writeProblem(w, http.StatusInternalServerError,
+			"Response generation unavailable — schema failed to compile at startup: "+
+				entry.DegradedResponseSchema)
 
 		return
 	}
@@ -264,7 +313,7 @@ func (h *Handler) validateRequest(
 
 	validationErrs, valErr := v.Validate(r)
 	if valErr != nil {
-		// Defensive: sentinel errors should not fire here since ServeMux
+		// Defensive: sentinel errors should not fire here since the router
 		// already matched the route, but handle them correctly if they do.
 		if errors.Is(valErr, validator.ErrOperationNotFound) {
 			h.responder.MethodNotAllowed(w, r.Method, r.URL.Path, nil)
@@ -415,8 +464,3 @@ func writeProblem(w http.ResponseWriter, status int, detail string) {
 	//nolint:errchkjson // write failures (client disconnect) are unrecoverable
 	_ = json.NewEncoder(w).Encode(pd)
 }
-
-func (discardHandler) Enabled(context.Context, slog.Level) bool  { return false }
-func (discardHandler) Handle(context.Context, slog.Record) error { return nil }
-func (d discardHandler) WithAttrs([]slog.Attr) slog.Handler      { return d }
-func (d discardHandler) WithGroup(string) slog.Handler           { return d }

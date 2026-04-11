@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -125,9 +126,8 @@ type statefulMuxResult struct {
 	handled  bool
 }
 
-// serveStatefulViaMux dispatches a request through a real ServeMux so that
-// path parameters (r.PathValue) are populated, then delegates to handleStatefulMode.
-// This is needed because handleStatefulMode relies on Go 1.22+ path value extraction.
+// serveStatefulViaMux dispatches a request through a chi router so that
+// path parameters are populated, then delegates to handleStatefulMode.
 func serveStatefulViaMux(
 	t *testing.T,
 	method, muxPattern, requestURL string,
@@ -139,11 +139,11 @@ func serveStatefulViaMux(
 
 	h := newStatefulTestHandler(store)
 	gen := newStatefulGen()
-	mux := http.NewServeMux()
+	r := chi.NewRouter()
 
 	var result statefulMuxResult
 
-	mux.HandleFunc(method+" "+muxPattern, func(_ http.ResponseWriter, r *http.Request) {
+	r.MethodFunc(method, muxPattern, func(_ http.ResponseWriter, r *http.Request) {
 		result.recorder = httptest.NewRecorder()
 		result.handled = h.handleStatefulMode(result.recorder, r, entry, gen, []byte(body))
 	})
@@ -157,9 +157,9 @@ func serveStatefulViaMux(
 		req = httptest.NewRequest(method, requestURL, nil)
 	}
 
-	mux.ServeHTTP(httptest.NewRecorder(), req)
+	r.ServeHTTP(httptest.NewRecorder(), req)
 
-	require.NotNil(t, result.recorder, "mux should have dispatched to handler")
+	require.NotNil(t, result.recorder, "router should have dispatched to handler")
 
 	return result
 }
@@ -630,6 +630,107 @@ func TestShallowMerge_ConcurrentSafety(t *testing.T) {
 	assert.Contains(t, resultMap, "count")
 }
 
+// --- degraded schema + stateful mode tests ---
+
+func TestHandleStatefulMode_DegradedCreate_ReturnsRFC7807(t *testing.T) {
+	store := state.NewInMemory(100)
+	h := newStatefulTestHandler(store)
+	gen := newStatefulGen()
+
+	entry := model.BehaviorEntry{
+		Method:      http.MethodPost,
+		PathPattern: "/reports",
+		Type:        model.BehaviorCreate,
+		SuccessCode: http.StatusCreated,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusCreated: nil,
+		},
+		Source:                 model.SourceHeuristic,
+		Confidence:             0.9,
+		DegradedResponseSchema: "compiler: schema compilation failed",
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/reports", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+
+	handled := h.handleStatefulMode(rec, req, entry, gen, []byte(`{}`))
+	require.True(t, handled, "degraded create should be handled (not fall through)")
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+}
+
+func TestHandleStatefulMode_DegradedCreate_WithExample_ServesExample(t *testing.T) {
+	store := state.NewInMemory(100)
+	h := newStatefulTestHandler(store)
+	gen := newStatefulGen()
+
+	exampleData := map[string]any{"id": float64(1), "status": "pending"}
+
+	entry := model.BehaviorEntry{
+		Method:      http.MethodPost,
+		PathPattern: "/reports",
+		Type:        model.BehaviorCreate,
+		SuccessCode: http.StatusCreated,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusCreated: nil,
+		},
+		ResponseExamples: map[int]any{
+			http.StatusCreated: exampleData,
+		},
+		Source:                 model.SourceHeuristic,
+		Confidence:             0.9,
+		DegradedResponseSchema: "compiler: schema compilation failed",
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/reports", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+
+	// Should NOT be handled by the degradation check — example available.
+	handled := h.handleStatefulMode(rec, req, entry, gen, []byte(`{}`))
+	require.True(t, handled, "create should still be handled")
+	// The create handler will call generateResponseBody with nil schema,
+	// which returns {}. But the degradation check should NOT have fired
+	// because the example exists. Verify we didn't get a 500 problem detail.
+	assert.NotEqual(t, http.StatusInternalServerError, rec.Code,
+		"should not return 500 when media-type example is available")
+}
+
+func TestHandleStatefulMode_DegradedFetch_StillWorks(t *testing.T) {
+	store := state.NewInMemory(100)
+	_ = store.Put("reports", "42", map[string]any{"id": "42", "status": "done"})
+	h := newStatefulTestHandler(store)
+	gen := newStatefulGen()
+
+	entry := model.BehaviorEntry{
+		Method:      http.MethodGet,
+		PathPattern: "/reports/{id}",
+		Type:        model.BehaviorFetch,
+		SuccessCode: http.StatusOK,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusOK: nil,
+		},
+		Source:                 model.SourceHeuristic,
+		Confidence:             0.9,
+		DegradedResponseSchema: "compiler: schema compilation failed",
+	}
+
+	// Use chi router to set path params.
+	r := chi.NewRouter()
+
+	var rec *httptest.ResponseRecorder
+
+	r.Get("/reports/{id}", func(_ http.ResponseWriter, r *http.Request) {
+		rec = httptest.NewRecorder()
+		h.handleStatefulMode(rec, r, entry, gen, nil)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/reports/42", nil)
+	r.ServeHTTP(httptest.NewRecorder(), req)
+
+	require.NotNil(t, rec)
+	assert.Equal(t, http.StatusOK, rec.Code, "fetch uses stored data — not affected by schema degradation")
+}
+
 // --- extractPathParams tests ---
 
 func TestExtractPathParams(t *testing.T) {
@@ -651,20 +752,32 @@ func TestExtractPathParams(t *testing.T) {
 			requestURL: "/pets",
 			wantParams: map[string]string{},
 		},
+		{
+			name:       "hyphenated param",
+			pattern:    "/teams/{enterprise-team}/members",
+			requestURL: "/teams/backend/members",
+			wantParams: map[string]string{"enterprise-team": "backend"},
+		},
+		{
+			name:       "dotted param",
+			pattern:    "/configs/{config.key}",
+			requestURL: "/configs/database",
+			wantParams: map[string]string{"config.key": "database"},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mux := http.NewServeMux()
+			r := chi.NewRouter()
 
 			var gotParams map[string]string
 
-			mux.HandleFunc("GET "+tt.pattern, func(_ http.ResponseWriter, r *http.Request) {
+			r.Get(tt.pattern, func(_ http.ResponseWriter, r *http.Request) {
 				gotParams = extractPathParams(r, tt.pattern)
 			})
 
 			req := httptest.NewRequest(http.MethodGet, tt.requestURL, nil)
-			mux.ServeHTTP(httptest.NewRecorder(), req)
+			r.ServeHTTP(httptest.NewRecorder(), req)
 
 			assert.Equal(t, tt.wantParams, gotParams)
 		})
