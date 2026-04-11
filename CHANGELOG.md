@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-04-10
+
+### Fixed
+
+#### Required Request Body Validation
+- Requests to endpoints with `requestBody.required: true` that send no body now return a clear 400 error: `"Request body is required"`
+- Previously, missing required bodies fell through to libopenapi-validator which produced confusing error messages like `"POST operation request content type '' does not exist"` (misdiagnoses the problem) or `"POST request body is empty for '/pets'"` (leaks internal path)
+- The check short-circuits before content-type and schema validation for faster feedback
+
 ## [0.3.2] - 2026-04-10
 
 ### Added

@@ -152,7 +152,11 @@ func (h *Handler) operationHandler(
 	gen *generator.DataGenerator,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		body, ok := h.validateRequest(w, r, v)
+		// validateRequest MUST run before the mode branch below. Stateful
+		// handlers (handleCreate, handleUpdate) assume a valid body —
+		// parseRequestBody silently treats an empty body as {}, which would
+		// create phantom resources if the required-body check were skipped.
+		body, ok := h.validateRequest(w, r, v, entry.BodyRequired)
 		if !ok {
 			return
 		}
@@ -219,14 +223,29 @@ func (h *Handler) handleDeterministicMode(
 // validation. Returns the request body bytes and true on success, or writes
 // an error response and returns false. On success, r.Body is replaced with
 // a buffered reader for downstream consumers.
+//
+// When bodyRequired is true, an empty request body is rejected with a clear
+// validation error before content-type or schema validation runs.
 func (h *Handler) validateRequest(
 	w http.ResponseWriter,
 	r *http.Request,
 	v validator.RequestValidator,
+	bodyRequired bool,
 ) ([]byte, bool) {
 	body, err := readBody(r)
 	if err != nil {
 		writeProblem(w, http.StatusRequestEntityTooLarge, "Request body exceeds 10MB limit")
+
+		return nil, false
+	}
+
+	// Required body check — before content-type and schema validation.
+	// Short-circuits with a clear message instead of falling through to
+	// libopenapi-validator which produces confusing content-type errors.
+	if bodyRequired && len(body) == 0 {
+		h.responder.ValidationError(w, []model.ValidationError{
+			{Field: "", Message: "Request body is required"},
+		})
 
 		return nil, false
 	}

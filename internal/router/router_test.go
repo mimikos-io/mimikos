@@ -657,6 +657,87 @@ func TestHandler_ExampleResponse_204NoContent_NeverReturnsBody(t *testing.T) {
 	assert.Empty(t, rec.Body.Bytes(), "204 should have no body even with example")
 }
 
+// --- Required body validation tests (Task 26) ---
+
+func TestHandler_RequiredBodyMissing_Returns400(t *testing.T) {
+	bm := model.NewBehaviorMap()
+	bm.Put(model.BehaviorEntry{
+		Method:       http.MethodPost,
+		PathPattern:  "/pets",
+		Type:         model.BehaviorCreate,
+		SuccessCode:  http.StatusCreated,
+		BodyRequired: true,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusCreated: {Name: "Pet", Schema: petObjectSchema()},
+		},
+		Source:     model.SourceHeuristic,
+		Confidence: 0.9,
+	})
+
+	resp := merrors.NewResponder()
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
+	h := NewHandler(bm, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/pets", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	pd := parseProblemDetail(t, rec.Body.Bytes())
+	assert.Equal(t, "Bad Request", pd["title"])
+
+	errors, ok := pd["errors"].([]any)
+	require.True(t, ok, "should contain errors array")
+	require.Len(t, errors, 1)
+
+	firstErr, ok := errors[0].(map[string]any)
+	require.True(t, ok)
+	assert.Empty(t, firstErr["field"])
+	assert.Equal(t, "Request body is required", firstErr["message"])
+}
+
+func TestHandler_RequiredBodyPresent_Succeeds(t *testing.T) {
+	bm := model.NewBehaviorMap()
+	bm.Put(model.BehaviorEntry{
+		Method:       http.MethodPost,
+		PathPattern:  "/pets",
+		Type:         model.BehaviorCreate,
+		SuccessCode:  http.StatusCreated,
+		BodyRequired: true,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusCreated: {Name: "Pet", Schema: petObjectSchema()},
+		},
+		Source:     model.SourceHeuristic,
+		Confidence: 0.9,
+	})
+
+	resp := merrors.NewResponder()
+	gen := generator.NewDataGenerator(generator.NewSemanticMapper(), 0, nil)
+	h := NewHandler(bm, &stubValidator{}, resp, gen, false, nil, model.ModeDeterministic, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/pets",
+		strings.NewReader(`{"name":"Fido"}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusCreated, rec.Code)
+}
+
+func TestHandler_OptionalBodyMissing_Succeeds(t *testing.T) {
+	// POST with no body when BodyRequired is false should pass through.
+	// (testBehaviorMap defaults BodyRequired to false.)
+	h := newTestHandler(&stubValidator{})
+
+	req := httptest.NewRequest(http.MethodPost, "/pets", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusCreated, rec.Code)
+}
+
 // --- isJSONContentType unit tests (NB2) ---
 
 func TestIsJSONContentType(t *testing.T) {
