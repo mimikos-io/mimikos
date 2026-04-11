@@ -60,6 +60,11 @@ type (
 		// Example: "gid" for Asana (from fetch path /projects/{project_gid}).
 		IDFieldHint string
 
+		// BodyRequired is true when the OpenAPI spec marks the request body
+		// as required (requestBody.required: true). Used by the router to
+		// reject requests with missing bodies before delegating to the validator.
+		BodyRequired bool
+
 		// ResponseExamples maps HTTP status codes to complete media-type example
 		// values extracted from the OpenAPI spec. When present, the router can
 		// return the example directly instead of generating data from the schema.

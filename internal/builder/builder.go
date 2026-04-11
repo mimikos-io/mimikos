@@ -115,6 +115,7 @@ func buildEntry(
 		RequestSchema:    requestSchema,
 		ResponseSchemas:  responseSchemas,
 		ResponseExamples: buildResponseExamples(op),
+		BodyRequired:     op.RequestBody != nil && op.RequestBody.Required,
 		Source:           model.SourceHeuristic,
 		Confidence:       result.Confidence,
 	}

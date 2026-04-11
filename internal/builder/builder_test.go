@@ -638,6 +638,64 @@ func TestBuildBehaviorMap_OperationIDPreserved(t *testing.T) {
 	assert.Equal(t, "listPets", entry.OperationID)
 }
 
+// --- Body Required ---
+
+func TestBuildBehaviorMap_BodyRequiredTrue(t *testing.T) {
+	spec := &parser.ParsedSpec{
+		Operations: []parser.Operation{
+			{
+				Method: http.MethodPost,
+				Path:   "/pets",
+				RequestBody: &parser.RequestBody{
+					Required: true,
+					Schema:   &parser.SchemaRef{Name: "Pet", Pointer: "#/components/schemas/Pet"},
+				},
+				Responses: map[int]*parser.Response{
+					http.StatusCreated: {StatusCode: http.StatusCreated},
+				},
+			},
+		},
+	}
+
+	bm, err := BuildBehaviorMap(spec, classifier.New(), nil, nil)
+	require.NoError(t, err)
+
+	entry, ok := bm.Get(http.MethodPost, "/pets")
+	require.True(t, ok)
+	assert.True(t, entry.BodyRequired, "BodyRequired should be true when spec requires body")
+}
+
+func TestBuildBehaviorMap_BodyRequiredFalseOrMissing(t *testing.T) {
+	spec := &parser.ParsedSpec{
+		Operations: []parser.Operation{
+			{
+				Method: http.MethodGet,
+				Path:   "/pets",
+				// No RequestBody at all.
+			},
+			{
+				Method: http.MethodPatch,
+				Path:   "/pets/{petId}",
+				RequestBody: &parser.RequestBody{
+					Required: false, // Explicitly optional.
+					Schema:   &parser.SchemaRef{Name: "PetUpdate", Pointer: "#/components/schemas/PetUpdate"},
+				},
+			},
+		},
+	}
+
+	bm, err := BuildBehaviorMap(spec, classifier.New(), nil, nil)
+	require.NoError(t, err)
+
+	getEntry, ok := bm.Get(http.MethodGet, "/pets")
+	require.True(t, ok)
+	assert.False(t, getEntry.BodyRequired, "BodyRequired should be false when no RequestBody")
+
+	patchEntry, ok := bm.Get(http.MethodPatch, "/pets/{petId}")
+	require.True(t, ok)
+	assert.False(t, patchEntry.BodyRequired, "BodyRequired should be false when Required is false")
+}
+
 // --- Response Examples ---
 
 func TestBuildBehaviorMap_ResponseExamplesThreaded(t *testing.T) {

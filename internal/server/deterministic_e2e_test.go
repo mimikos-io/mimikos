@@ -865,6 +865,63 @@ func TestE2E_SubSeedStability(t *testing.T) {
 	}
 }
 
+// --- Required Body Validation E2E Tests ---
+
+func TestE2E_Petstore30_MissingRequiredBody(t *testing.T) {
+	skipIfShort(t)
+
+	srv := buildTestServer(t, "petstore-3.0.yaml")
+	defer srv.Close()
+
+	// POST /pets with no body — spec requires requestBody.
+	resp := doRequest(t, srv, http.MethodPost, "/pets")
+	defer closeBody(t, resp)
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	assert.Contains(t, resp.Header.Get("Content-Type"), "application/problem+json")
+
+	problem := decodeProblemJSON(t, resp)
+	assert.Equal(t, "Bad Request", problem["title"])
+	assert.Equal(t, "Request validation failed", problem["detail"])
+
+	errors, ok := problem["errors"].([]any)
+	require.True(t, ok, "should contain errors array")
+	require.Len(t, errors, 1)
+
+	firstErr, ok := errors[0].(map[string]any)
+	require.True(t, ok)
+	assert.Empty(t, firstErr["field"])
+	assert.Equal(t, "Request body is required", firstErr["message"])
+}
+
+func TestE2E_Petstore30_GetWithNoBody_Succeeds(t *testing.T) {
+	skipIfShort(t)
+
+	srv := buildTestServer(t, "petstore-3.0.yaml")
+	defer srv.Close()
+
+	// GET /pets has no requestBody — should succeed with no body.
+	resp := doRequest(t, srv, http.MethodGet, "/pets")
+	defer closeBody(t, resp)
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestE2E_StatusTest_OptionalBodyMissing_Succeeds(t *testing.T) {
+	skipIfShort(t)
+
+	srv := buildTestServer(t, "e2e-status-test.yaml")
+	defer srv.Close()
+
+	// PATCH /resources/1 with no body — requestBody.required is false.
+	// Exercises the real libopenapi-validator (not a stub) to confirm
+	// that an optional missing body doesn't produce a confusing error.
+	resp := doRequest(t, srv, http.MethodPatch, "/resources/1")
+	defer closeBody(t, resp)
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
 // --- Test Helpers (E2E-specific; shared helpers are in helpers_test.go) ---
 
 // doJSONRequest performs an HTTP request with a JSON body.
