@@ -336,9 +336,9 @@ failures.
 - **State is in-memory.** Restarting Mimikos clears all seeded data. The state does not
   persist across restarts.
 
-- **Resources are stored by type, not by path hierarchy.** A known limitation:
-  `/projects/{id}/tasks` and `/tasks` share the same `tasks` store namespace. Creating
-  a task via either path makes it visible from both.
+- **Resources are scoped by path hierarchy.** `/projects/{id}/tasks` and `/tasks` are
+  separate namespaces. Creating a task via `POST /tasks` does not make it visible under
+  `GET /projects/{id}/tasks`. Use the correct endpoint for the scope you need.
 
 - **Do not send `X-Mimikos-Status` when seeding.** This header bypasses stateful mode
   entirely — no resource will be stored and the response comes from the deterministic

@@ -680,12 +680,11 @@ func TestStatefulE2E_Asana_GenericFallsThrough(t *testing.T) {
 	assert.Contains(t, resp.Header.Get("Content-Type"), "application/json")
 }
 
-// --- 17.4 Nested Resource E2E Test ---
+// --- 17.4 Nested Resource Namespace Isolation ---
 //
-// Known limitation: /projects/{project_gid}/tasks and /tasks share the "tasks"
-// store namespace because ResourceType() extracts the last non-param segment.
-// Composite store keys (e.g., "projects/{gid}/tasks" vs "tasks") would fix this
-// but require changes to the store key model — deferred.
+// /projects/{project_gid}/tasks and /tasks use separate store namespaces:
+// "projects/*/tasks" vs "tasks". Creating a task via POST /tasks does NOT
+// make it visible under GET /projects/{gid}/tasks.
 
 func TestStatefulE2E_Asana_NestedResourceNamespace(t *testing.T) {
 	skipIfShort(t)
@@ -700,7 +699,7 @@ func TestStatefulE2E_Asana_NestedResourceNamespace(t *testing.T) {
 
 	require.Equal(t, http.StatusCreated, createResp.StatusCode)
 
-	// GET /tasks lists the task.
+	// GET /tasks lists the task — namespace "tasks".
 	rootList := doRequest(t, srv, http.MethodGet, "/tasks")
 	defer closeBody(t, rootList)
 
@@ -711,10 +710,8 @@ func TestStatefulE2E_Asana_NestedResourceNamespace(t *testing.T) {
 	require.True(t, ok, "tasks list data should be an array")
 	require.Len(t, rootItems, 1, "/tasks should have 1 task")
 
-	// GET /projects/{project_gid}/tasks shares the "tasks" namespace.
-	// The nested path sees the same tasks as the root path.
-	// This documents the namespace collision: ResourceType() extracts "tasks"
-	// from both paths, so they share the same store namespace.
+	// GET /projects/{project_gid}/tasks uses namespace "projects/*/tasks" —
+	// separate from "tasks", so the root-created task is NOT visible here.
 	nestedList := doRequest(t, srv, http.MethodGet, "/projects/proj1/tasks")
 	defer closeBody(t, nestedList)
 
@@ -723,7 +720,7 @@ func TestStatefulE2E_Asana_NestedResourceNamespace(t *testing.T) {
 
 	nestedItems, ok := nestedBody["data"].([]any)
 	require.True(t, ok, "nested tasks list data should be an array")
-	assert.Len(t, nestedItems, 1, "nested /projects/{gid}/tasks shares 'tasks' namespace (known limitation)")
+	assert.Empty(t, nestedItems, "/projects/{gid}/tasks has separate namespace — should be empty")
 }
 
 // --- Targeted Pattern Tests (e2e-stateful-test.yaml) ---
