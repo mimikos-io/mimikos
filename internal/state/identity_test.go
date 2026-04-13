@@ -140,7 +140,7 @@ func TestInferResourceIdentity_PathParamFromParams_Nested(t *testing.T) {
 	params := map[string]string{"userId": "u1", "orderId": "xyz"}
 
 	resType, resID := InferResourceIdentity("/users/{userId}/orders/{orderId}", params, nil, "")
-	assert.Equal(t, "orders", resType)
+	assert.Equal(t, "users/*/orders", resType)
 	assert.Equal(t, "xyz", resID)
 }
 
@@ -148,7 +148,7 @@ func TestInferResourceIdentity_PathParamFromParams_Versioned(t *testing.T) {
 	params := map[string]string{"petId": "p1"}
 
 	resType, resID := InferResourceIdentity("/v2/pets/{petId}", params, nil, "")
-	assert.Equal(t, "pets", resType)
+	assert.Equal(t, "v2/pets", resType)
 	assert.Equal(t, "p1", resID)
 }
 
@@ -211,7 +211,7 @@ func TestInferResourceIdentity_VersionedPath(t *testing.T) {
 	body := map[string]any{"id": "p1"}
 
 	resType, resID := InferResourceIdentity("/v1/pets", nil, body, "")
-	assert.Equal(t, "pets", resType)
+	assert.Equal(t, "v1/pets", resType)
 	assert.Equal(t, "p1", resID)
 }
 
@@ -321,10 +321,49 @@ func TestFindField(t *testing.T) {
 // --- Resource type extraction ---
 
 func TestExtractResourceType(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		path     string
 		wantType string
+	}{
+		// Flat paths — unchanged behavior.
+		{"simple collection", "/users", "users"},
+		{"item path", "/users/{id}", "users"},
+		{"root", "/", ""},
+		{"empty", "", ""},
+		{"param only", "/{id}", ""},
+
+		// Nested paths — namespace includes parent hierarchy.
+		{"nested item", "/users/{userId}/orders/{orderId}", "users/*/orders"},
+		{"nested collection", "/users/{userId}/orders", "users/*/orders"},
+		{"deeply nested", "/orgs/{orgId}/teams/{teamId}/members/{memberId}", "orgs/*/teams/*/members"},
+		{"nested collection no trailing param", "/projects/{project_gid}/tasks", "projects/*/tasks"},
+
+		// Versioned paths — versions are preserved (spec is law).
+		{"versioned", "/v1/pets", "v1/pets"},
+		{"versioned with param", "/v2/pets/{petId}", "v2/pets"},
+		{"deeply versioned", "/api/v3/pets", "api/v3/pets"},
+		{"versioned nested", "/v1/users/{userId}/orders/{orderId}", "v1/users/*/orders"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.wantType, extractResourceType(tt.path))
+		})
+	}
+}
+
+// --- Leaf collection extraction ---
+
+func TestLeafCollection(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		path string
+		want string
 	}{
 		{"simple collection", "/users", "users"},
 		{"item path", "/users/{id}", "users"},
@@ -336,10 +375,12 @@ func TestExtractResourceType(t *testing.T) {
 		{"root", "/", ""},
 		{"empty", "", ""},
 		{"param only", "/{id}", ""},
+		{"versioned nested", "/v1/users/{userId}/orders/{orderId}", "orders"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.wantType, extractResourceType(tt.path))
+			t.Parallel()
+			assert.Equal(t, tt.want, LeafCollection(tt.path))
 		})
 	}
 }

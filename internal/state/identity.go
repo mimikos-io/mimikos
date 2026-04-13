@@ -4,17 +4,18 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 )
 
-// versionSegment matches path segments like "v1", "v2", "api".
-var versionSegment = regexp.MustCompile(`^(?:v\d+|api)$`)
-
-// InferResourceIdentity extracts a resource type and ID from the path pattern,
-// path parameters, response body, and an optional ID field hint. It uses a
-// six-strategy approach:
+// InferResourceIdentity extracts a resource type namespace and ID from the path
+// pattern, path parameters, response body, and an optional ID field hint.
+//
+// The resource type is the full collection path pattern with the trailing
+// parameter stripped and interior parameters replaced with "*". See
+// [ResourceType] for details.
+//
+// The ID is extracted using a six-strategy approach:
 //
 //  1. Exact match: path param name matches body field (case-insensitive)
 //  2. Suffix strip: strip resource prefix from param, match remainder in body
@@ -22,9 +23,6 @@ var versionSegment = regexp.MustCompile(`^(?:v\d+|api)$`)
 //  4. Body "id" fallback: universal convention
 //  5. Path param value: from pathParams map (for fetch/update/delete where body is nil)
 //  6. Deterministic UUID fallback
-//
-// Resource type is the collection segment preceding the last path parameter,
-// or the last non-version segment for parameterless paths.
 func InferResourceIdentity(
 	pathPattern string,
 	pathParams map[string]string,
@@ -37,41 +35,68 @@ func InferResourceIdentity(
 	return resourceType, resourceID
 }
 
-// ResourceType returns the collection name from a URL path pattern.
-// This is the resource type key used for state storage.
+// ResourceType returns the namespace key for a URL path pattern, used as the
+// first key in state storage. The namespace is the full collection path pattern
+// with the trailing path parameter stripped (item path → collection path) and
+// interior parameters replaced with "*".
 //
-// For "/users/{userId}/orders/{orderId}", it returns "orders".
-// For "/users", it returns "users".
-// Version segments (v1, v2, api) are skipped.
+// Paths are taken literally — version segments (v1, api) are preserved because
+// the spec is the authoritative source. If the spec defines /v1/pets and
+// /v2/pets, they are separate namespaces.
+//
+//	"/users"                                    → "users"
+//	"/users/{id}"                               → "users"
+//	"/projects/{project_gid}/tasks"             → "projects/*/tasks"
+//	"/projects/{project_gid}/tasks/{task_gid}"  → "projects/*/tasks"
+//	"/v1/pets/{petId}"                          → "v1/pets"
 func ResourceType(pathPattern string) string {
 	return extractResourceType(pathPattern)
 }
 
-// extractResourceType returns the collection name from a path pattern.
-// For "/users/{userId}/orders/{orderId}", it returns "orders".
-// For "/users", it returns "users".
-// Version segments (v1, v2, api) are skipped.
+// extractResourceType builds the namespace key from a path pattern.
+// Strips the trailing parameter (item → collection), replaces interior
+// parameters with "*", and joins remaining segments with "/".
 func extractResourceType(pathPattern string) string {
 	segments := splitPath(pathPattern)
 
-	// Walk backwards to find the last non-param, non-version segment.
-	// For item paths like /pets/{petId}, the collection is "pets" (before the param).
-	// For collection paths like /pets, the collection is "pets" (the last segment).
-	var lastCollection string
+	// Strip trailing param: /pets/{petId} → /pets.
+	if len(segments) > 0 && isParam(segments[len(segments)-1]) {
+		segments = segments[:len(segments)-1]
+	}
+
+	result := make([]string, 0, len(segments))
 
 	for _, seg := range segments {
 		if isParam(seg) {
-			continue
+			result = append(result, "*")
+		} else {
+			result = append(result, seg)
 		}
-
-		if versionSegment.MatchString(seg) {
-			continue
-		}
-
-		lastCollection = seg
 	}
 
-	return lastCollection
+	return strings.Join(result, "/")
+}
+
+// LeafCollection returns the last non-parameter segment from a path pattern.
+// This is the leaf collection name used for identity extraction operations
+// like StripResourcePrefix and Singularize, which need a single collection
+// word rather than a full namespace path.
+//
+//	"/users/{userId}/orders/{orderId}" → "orders"
+//	"/v1/pets/{petId}"                 → "pets"
+//	"/tasks"                           → "tasks"
+func LeafCollection(pathPattern string) string {
+	segments := splitPath(pathPattern)
+
+	var last string
+
+	for _, seg := range segments {
+		if !isParam(seg) {
+			last = seg
+		}
+	}
+
+	return last
 }
 
 // extractResourceID extracts a resource ID using the six-strategy approach.
@@ -99,9 +124,11 @@ func extractResourceID(
 
 	// Strategy 2: Suffix strip — strip resource prefix from param name, match remainder.
 	// Covers: Petstore (petId→id), Asana (task_gid→gid), GitHub (comment_id→id).
+	// Uses leafCollection (not extractResourceType) because StripResourcePrefix needs
+	// the singular form of the collection name, not the full namespace path.
 	if ok && lastParam != "" {
-		resourceType := extractResourceType(pathPattern)
-		if remainder := StripResourcePrefix(lastParam, resourceType); remainder != "" {
+		leaf := LeafCollection(pathPattern)
+		if remainder := StripResourcePrefix(lastParam, leaf); remainder != "" {
 			if val := findField(body, remainder); val != nil {
 				return coerceToString(val)
 			}

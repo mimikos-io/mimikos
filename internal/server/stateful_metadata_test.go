@@ -291,6 +291,17 @@ func TestComputeIDFieldHint(t *testing.T) {
 			},
 			want: "id",
 		},
+		{
+			name: "nested path uses namespace key for lookup and leaf for strip",
+			entry: model.BehaviorEntry{
+				PathPattern: "/projects/{project_gid}/sections",
+				Type:        model.BehaviorCreate,
+			},
+			paramByResource: map[string]string{
+				"projects/*/sections": "section_gid",
+			},
+			want: "gid",
+		},
 	}
 
 	for _, tt := range tests {
@@ -314,6 +325,8 @@ func TestBuildParamIndex(t *testing.T) {
 		{Method: "GET", PathPattern: "/projects", Type: model.BehaviorList},
 		{Method: "PUT", PathPattern: "/tasks/{task_gid}", Type: model.BehaviorUpdate},
 		{Method: "DELETE", PathPattern: "/pets/{petId}", Type: model.BehaviorDelete},
+		// Nested path: namespace includes parent hierarchy.
+		{Method: "GET", PathPattern: "/projects/{project_gid}/sections/{section_gid}", Type: model.BehaviorFetch},
 	}
 
 	idx := buildParamIndex(entries)
@@ -321,6 +334,7 @@ func TestBuildParamIndex(t *testing.T) {
 	assert.Equal(t, "project_gid", idx["projects"])
 	assert.Equal(t, "task_gid", idx["tasks"])
 	assert.Equal(t, "petId", idx["pets"])
+	assert.Equal(t, "section_gid", idx["projects/*/sections"], "nested path uses namespace key")
 	assert.NotContains(t, idx, "items") // no fetch/update/delete for items
 }
 

@@ -290,6 +290,5 @@ One project in the store. The list response is wrapped: `response.data` is an ar
 curl -s http://localhost:8080/projects/12345/tasks
 ```
 
-Note: this returns ALL tasks (not just tasks for this project) because of a known
-namespace limitation — `/projects/{id}/tasks` and `/tasks` share the same store
-namespace.
+Note: `/projects/{id}/tasks` and `/tasks` are separate namespaces. This endpoint only
+returns tasks created via `POST /projects/{id}/tasks`, not tasks created via `POST /tasks`.

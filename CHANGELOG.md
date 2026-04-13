@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] - 2026-04-13
+
+### Fixed
+
+#### Nested Resource Namespace Collision
+- `/projects/{project_gid}/tasks` and `/tasks` no longer share the same store namespace in stateful mode
+- Previously, `POST /tasks` created a task visible under `GET /projects/{any}/tasks` and vice versa — all resources of the same leaf type (e.g., "tasks") shared one pool regardless of path hierarchy
+- Store namespaces now include the full path structure: `/projects/{gid}/tasks` uses namespace `projects/*/tasks`, while `/tasks` uses `tasks`
+- Affects any spec with nested resources (like `/projects/{gid}/sections`, `/teams/{gid}/projects`)
+
+### Changed
+
+#### Version Segments Preserved in Store Namespace
+- Path version segments (`v1`, `v2`, `api`) are no longer stripped from store namespace keys
+- `/v1/pets` now uses namespace `v1/pets` instead of `pets` — if a spec defines both `/v1/pets` and `/v2/pets`, they are separate namespaces
+- Consistent with the "spec is law" principle: the spec's paths are taken literally
+- No impact on specs with a single version prefix (the common case) — the namespace key changes but all CRUD operations use the same key, so behavior is identical
+
 ## [0.3.4] - 2026-04-11
 
 ### Changed

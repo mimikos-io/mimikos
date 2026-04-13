@@ -225,7 +225,11 @@ func computeIDFieldHint(e model.BehaviorEntry, paramByResource map[string]string
 		return ""
 	}
 
-	remainder := state.StripResourcePrefix(paramName, rt)
+	// Use the leaf collection name for StripResourcePrefix — it needs a
+	// singular word like "sections", not a namespace path like "projects/*/sections".
+	leaf := state.LeafCollection(e.PathPattern)
+
+	remainder := state.StripResourcePrefix(paramName, leaf)
 	if remainder != "" {
 		return remainder
 	}
