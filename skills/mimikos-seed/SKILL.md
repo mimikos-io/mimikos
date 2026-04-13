@@ -1,0 +1,348 @@
+---
+name: mimikos-seed
+description: >-
+  Seed a running Mimikos mock server in stateful mode by reading an OpenAPI spec,
+  constructing valid request bodies, and sending POST requests to populate resources.
+  Use when the user wants to populate mock data, seed a mock server, or set up test
+  data for Mimikos.
+---
+
+# Mimikos Seeding Skill
+
+Seed a running Mimikos instance in stateful mode so that GET and LIST endpoints return
+realistic data. You will read the OpenAPI spec, construct valid request bodies, and
+send HTTP requests to create resources.
+
+## When to Use
+
+- User says "seed mimikos", "populate the mock", "create test data", or similar
+- User has a running Mimikos instance in stateful mode and wants data in it
+- User wants to test their application against a mock API that has resources
+
+## Prerequisites
+
+Before seeding, you must ensure Mimikos is running in stateful mode. Follow this
+sequence:
+
+### 1. Locate the OpenAPI Spec File
+
+Ask the user for the spec file path if you don't already know it. Look for `.yaml`,
+`.yml`, or `.json` files in the project that look like OpenAPI specs (contain `openapi:`
+or `"openapi"` at the top level).
+
+### 2. Check if Mimikos Is Already Running
+
+Run `pgrep -af mimikos` (or equivalent) to inspect running Mimikos processes. The
+output shows the full command line, including mode, port, and spec file:
+
+```
+12345 mimikos start --mode stateful --port 8080 petstore.yaml
+```
+
+**If Mimikos is running in stateful mode** — use it. Extract the port and spec path
+from the process arguments. Proceed to the seeding workflow.
+
+**If Mimikos is running in deterministic mode** — inform the user:
+"Mimikos is running in deterministic mode. Seeding requires stateful mode. Should I
+restart it in stateful mode?" Do NOT kill the process without explicit user permission.
+
+**If Mimikos is not running** — start it:
+```bash
+mimikos start --mode stateful <spec-file>
+```
+
+Start in **non-strict mode** (the default) unless the user explicitly requests strict.
+Non-strict is the right default for seeding because strict mode returns 500 if any
+generated response fails schema validation, which can block seeding on specs with minor
+schema inconsistencies.
+
+If the user requests strict mode:
+```bash
+mimikos start --mode stateful --strict <spec-file>
+```
+
+### 3. Confirm the Port
+
+Default port is 8080. If a custom port is in use, note it from the process arguments
+or the startup banner:
+```
+Listening on :9090 (stateful mode, strict=false)
+```
+
+## How Stateful Create Works
+
+You must understand this before sending requests:
+
+- **Create responses are generated from the response schema, not echoed from your
+  request body.** When you POST `{"name": "Buddy"}`, the response will NOT contain
+  `"name": "Buddy"`. Mimikos generates the response from the response schema using
+  its own data generation pipeline.
+
+- **Response values come from this precedence chain:**
+    1. `const` values in the schema (returned as-is)
+    2. `enum` values (selected deterministically)
+    3. `example` values on schema properties (if type-compatible)
+    4. Semantic field-name mapping (e.g., `email` fields get realistic emails)
+    5. Faker fallback (constraint-aware random generation)
+
+- **Your request body matters for:** validation (must pass the request schema) and
+  deterministic seeding (different bodies produce different generated responses).
+
+- **If you need specific field values,** POST first to create the resource, extract the
+  generated ID from the response, then PATCH/PUT with your desired values. The update
+  handler shallow-merges your request body onto the stored resource.
+
+## Seeding Workflow
+
+Follow these steps in order:
+
+### Step 1: Confirm Seeding Scope
+
+Ask the user: **"Do you want me to seed all create endpoints, or specific ones?"**
+
+- If the user names specific resources or endpoints, seed only those.
+- If the user says "all" or doesn't specify, seed every endpoint classified as `create`
+  in the startup banner.
+
+### Step 2: Read the Startup Output
+
+Check the Mimikos startup output for warnings. Two signals matter:
+
+**Failed endpoints** — these always return 500. Do not attempt to seed them:
+
+```
+⚠ 2 endpoint(s) failed to register:
+    POST /broken-endpoint
+    GET /other-broken
+```
+
+**Degraded schemas** — these have schemas that failed to compile:
+
+```
+⚠ 3 endpoint(s) have degraded schemas:
+    POST /some-endpoint
+    ...
+```
+
+- In stateful mode, degraded **create** endpoints always return 500 (they need the
+  response schema to generate the resource to store). Skip them.
+- In strict mode (`strict=true`), degraded endpoints with request bodies also return
+    500. Skip any body-bearing method on a degraded endpoint in strict mode.
+
+If there are no warnings, all endpoints are healthy.
+
+### Step 3: Read the OpenAPI Spec
+
+Open and read the spec file. You need to identify:
+
+1. **Create endpoints** — look for `POST` operations that return `201` or `200` with a
+   response body. The startup banner also shows behaviors (`create`, `list`, `fetch`,
+   etc.) which you can cross-reference.
+
+2. **Request body schemas** — for each create endpoint, follow the path:
+   ```
+   paths.<path>.post.requestBody.content["application/json"].schema
+   ```
+   Follow any `$ref` to find the actual schema definition in `components.schemas`.
+
+3. **Response body schemas** — to understand what Mimikos will return:
+   ```
+   paths.<path>.post.responses["201"].content["application/json"].schema
+   ```
+
+### Step 4: Determine Seeding Order
+
+Seed parent resources before child resources. Use path nesting as the heuristic:
+
+```
+/pets                              → seed first (no parent dependency)
+/pets/{petId}/vaccinations         → seed second (needs a pet ID)
+/organizations                     → seed first
+/organizations/{orgId}/teams       → seed second (needs an org ID)
+/organizations/{orgId}/teams/{id}  → seed third (needs org + team)
+```
+
+**Rules:**
+
+- Shorter paths (fewer segments) go first
+- If two paths have the same depth, order doesn't matter
+- Parameterless collection paths (`/pets`) come before parameterized item paths
+
+### Step 5: Construct Request Bodies
+
+For each create endpoint, build a valid JSON body from the request schema:
+
+**Required fields only.** Include all fields marked `required` in the schema. Optional
+fields can be included for realism but aren't necessary.
+
+**Omit ID fields.** Do not include `id`, `gid`, `_id`, or similar identifier fields in
+request bodies. Mimikos generates these in the response. Sending them can conflict with
+identity extraction.
+
+**Follow the schema types:**
+
+- `string` → use a realistic value based on the field name
+- `integer` / `number` → use a plausible value within any `minimum`/`maximum` bounds
+- `boolean` → use `true` or `false`
+- `enum` → pick one of the values listed in the schema
+- `object` → recurse into the sub-schema's properties
+- `array` → provide 1-2 items matching the `items` schema
+
+**Use field names as semantic hints:**
+
+- `name`, `firstName`, `lastName` → realistic names
+- `email` → realistic email format
+- `phone` → realistic phone number
+- `url`, `website` → realistic URL
+- `description`, `summary` → short descriptive text
+- `price`, `amount`, `cost` → realistic monetary values
+- `address`, `city`, `country` → realistic location data
+- `createdAt`, `updatedAt` → ISO 8601 timestamps
+
+### Step 6: Handle Common Patterns
+
+**Wrapper keys (e.g., Asana, Notion):**
+Some APIs wrap request bodies in an envelope like `{"data": {...}}`. You will see this
+in the request schema — the top-level object has a single property (e.g., `data`) whose
+value is the actual resource schema. Match the spec:
+
+```json
+// Flat request (Petstore, Stripe):
+{
+  "name": "Buddy",
+  "tag": "dog"
+}
+
+// Wrapped request (Asana):
+{
+  "data": {
+    "name": "My Project"
+  }
+}
+```
+
+**Nested resources:**
+When creating a child resource (e.g., `POST /pets/{petId}/vaccinations`), use a real ID
+from a previously created parent resource in the URL path:
+
+```
+POST http://localhost:8080/pets/8423671/vaccinations
+```
+
+The `8423671` must be the actual ID returned when you created the pet.
+
+**Multiple resource types:**
+Seed each resource type independently. Resources are stored by type — creating a pet
+does not affect the projects store.
+
+### Step 7: Send Create Requests
+
+For each create endpoint, send a POST request:
+
+```bash
+curl -s -X POST http://localhost:<port><path> \
+  -H "Content-Type: application/json" \
+  -d '<json-body>'
+```
+
+**After each successful create:**
+
+1. Check the response status code (expect 201 or 200)
+2. Extract the resource ID from the response body — look for `id`, `gid`, or the field
+   that matches the path parameter name on the corresponding GET endpoint
+3. Store this ID — you will need it for child resources and verification
+
+**Wrapper key responses:**
+If the API uses wrapper keys, the ID is inside the wrapper:
+
+```json
+// Flat response: ID is at response.id
+{
+  "id": "abc123",
+  "name": "Generated Name",
+  ...
+}
+
+// Wrapped response: ID is at response.data.gid
+{
+  "data": {
+    "gid": "abc123",
+    "name": "Generated Name",
+    ...
+  }
+}
+```
+
+### Step 8: Optionally Set Specific Values
+
+If the user wants specific field values (not the generated defaults), update resources
+after creation:
+
+```bash
+curl -s -X PATCH http://localhost:<port><path>/<id> \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Buddy", "tag": "dog"}'
+```
+
+The update handler shallow-merges your fields onto the stored resource. Fields you send
+overwrite the generated values. Fields you omit are preserved.
+
+For wrapped APIs, wrap the update body too:
+
+```bash
+curl -s -X PATCH http://localhost:<port>/projects/<gid> \
+  -H "Content-Type: application/json" \
+  -d '{"data": {"name": "My Project"}}'
+```
+
+### Step 9: Verify
+
+After seeding all resource types, verify the state:
+
+1. **List endpoints** — call GET on collection paths and confirm resources exist:
+   ```bash
+   curl -s http://localhost:<port>/pets
+   ```
+
+2. **Fetch endpoints** — spot-check individual resources using stored IDs:
+   ```bash
+   curl -s http://localhost:<port>/pets/<id>
+   ```
+
+3. **Count** — verify the number of resources matches what you created.
+
+Report the results to the user: which resources were created, their IDs, and any
+failures.
+
+## Error Reference
+
+| Status  | Meaning                   | Action                                                                                                         |
+|---------|---------------------------|----------------------------------------------------------------------------------------------------------------|
+| 201/200 | Success                   | Extract ID, continue                                                                                           |
+| 400     | Request validation failed | Fix the request body — check required fields, types, constraints. The response body lists which fields failed. |
+| 404     | Path not found            | Check the URL path matches the spec exactly                                                                    |
+| 405     | Method not allowed        | Check the HTTP method — this path may not support POST                                                         |
+| 415     | Wrong content type        | Add `-H "Content-Type: application/json"`                                                                      |
+| 422     | Validation error          | Similar to 400 — fix request body                                                                              |
+| 500     | Server error              | Likely a degraded or failed endpoint. Check startup output. Do not retry — this endpoint cannot be seeded.     |
+
+## Important Constraints
+
+- **Content-Type header is required.** Always send `Content-Type: application/json` with
+  POST/PUT/PATCH requests. Mimikos returns 415 without it.
+
+- **Request body size limit is 10MB.** This is unlikely to be hit during seeding.
+
+- **State is in-memory.** Restarting Mimikos clears all seeded data. The state does not
+  persist across restarts.
+
+- **Resources are stored by type, not by path hierarchy.** A known limitation:
+  `/projects/{id}/tasks` and `/tasks` share the same `tasks` store namespace. Creating
+  a task via either path makes it visible from both.
+
+- **Do not send `X-Mimikos-Status` when seeding.** This header bypasses stateful mode
+  entirely — no resource will be stored and the response comes from the deterministic
+  generator instead.
+
+- **Default capacity is 10,000 resources.** Configurable via `--max-resources`. LRU
+  eviction applies when capacity is reached.
