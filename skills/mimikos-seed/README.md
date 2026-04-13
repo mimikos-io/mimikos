@@ -1,0 +1,86 @@
+# Mimikos Seeding Skill
+
+An AI agent skill that teaches Claude Code and Cursor agents how to seed a running
+[Mimikos](https://github.com/mimikos-io/mimikos) mock server in stateful mode.
+
+Instead of manually constructing curl commands and reading schemas, the agent reads your
+OpenAPI spec, constructs valid request bodies, sends POST requests, and verifies the
+seeded state — turning a 10-minute manual task into a 30-second automated one.
+
+## What It Does
+
+1. Reads your OpenAPI spec to discover create endpoints and their request schemas
+2. Determines dependency order (parent resources before children)
+3. Constructs valid JSON request bodies with realistic values
+4. Sends POST requests to a running Mimikos instance
+5. Extracts generated IDs from responses
+6. Optionally updates resources with specific values via PATCH/PUT
+7. Verifies the seeded state via GET/LIST endpoints
+
+## Files
+
+| File          | Purpose                                                |
+|---------------|--------------------------------------------------------|
+| `SKILL.md`    | Main skill instructions — the agent reads this         |
+| `examples.md` | Two concrete seeding examples (Petstore + Asana-style) |
+| `README.md`   | This file — setup instructions for humans              |
+
+## Skill Files
+
+Download both files from the Mimikos repository:
+
+- [`SKILL.md`](https://github.com/mimikos-io/mimikos/blob/main/skills/mimikos-seed/SKILL.md)
+  — main skill instructions (required)
+- [`examples.md`](https://github.com/mimikos-io/mimikos/blob/main/skills/mimikos-seed/examples.md)
+  — two concrete seeding examples (recommended)
+
+## Setup: Claude Code
+
+Place `SKILL.md` in your project's Claude Code commands directory:
+
+```
+.claude/commands/mimikos-seed.md
+```
+
+To include the examples (recommended), concatenate both files into one command file:
+
+```
+.claude/commands/mimikos-seed.md  ← contents of SKILL.md + examples.md
+```
+
+Then in Claude Code, invoke it with:
+
+```
+/mimikos-seed
+```
+
+Or reference it naturally in conversation — Claude Code will use the skill when you ask
+it to seed, populate, or create test data for Mimikos.
+
+## Setup: Cursor
+
+Place `SKILL.md` in your project's Cursor rules directory:
+
+```
+.cursor/rules/mimikos-seed.mdc
+```
+
+To include the examples, concatenate both files into the rules file.
+
+## Prerequisites
+
+- Mimikos installed (see [Installation](https://github.com/mimikos-io/mimikos#installation))
+- Mimikos running in stateful mode: `mimikos start --mode stateful <spec-file>`
+- An OpenAPI 3.x spec file accessible to the agent
+
+## Usage
+
+Once the skill is set up, ask your agent:
+
+- "Seed the Mimikos server with test data"
+- "Populate the mock API with sample resources"
+- "Create 5 pets in the Petstore mock"
+- "Set up test data for the running mock server"
+
+The agent will read your spec, construct valid requests, and populate the running
+Mimikos instance.
