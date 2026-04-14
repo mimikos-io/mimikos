@@ -77,6 +77,39 @@ func extractResourceType(pathPattern string) string {
 	return strings.Join(result, "/")
 }
 
+// ParentScope computes the scope string from a path pattern and resolved path
+// parameter values. The scope is the "/"-joined values of all interior (parent)
+// path parameters — those that remain after the trailing path parameter is
+// stripped (same stripping as [ResourceType]).
+//
+// Flat paths with no parent parameters produce an empty scope "".
+//
+//	ParentScope("/pets/{petId}", {"petId": "1"})                                → ""
+//	ParentScope("/projects/{gid}/tasks", {"gid": "1"})                          → "1"
+//	ParentScope("/projects/{gid}/tasks/{tid}", {"gid":"1","tid":"a"})           → "1"
+//	ParentScope("/orgs/{o}/projects/{p}/tasks/{t}", {"o":"x","p":"y","t":"z"})  → "x/y"
+func ParentScope(pathPattern string, pathParams map[string]string) string {
+	segments := splitPath(pathPattern)
+
+	// Strip trailing param — same as extractResourceType.
+	if len(segments) > 0 && isParam(segments[len(segments)-1]) {
+		segments = segments[:len(segments)-1]
+	}
+
+	var values []string
+
+	for _, seg := range segments {
+		if isParam(seg) {
+			name := seg[1 : len(seg)-1] // strip { }
+			if val, ok := pathParams[name]; ok && val != "" {
+				values = append(values, val)
+			}
+		}
+	}
+
+	return strings.Join(values, "/")
+}
+
 // LeafCollection returns the last non-parameter segment from a path pattern.
 // This is the leaf collection name used for identity extraction operations
 // like StripResourcePrefix and Singularize, which need a single collection

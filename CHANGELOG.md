@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] - 2026-04-14
+
+### Fixed
+
+#### Parent-Scoped Resource Isolation
+- Resources under different parent paths are now isolated in stateful mode
+- Previously, `POST /projects/1/tasks` and `POST /projects/2/tasks` shared the same pool — `GET /projects/1/tasks` listed tasks from all projects, not just project 1
+- Parent path parameter values now partition resources within a namespace: project 1's tasks and project 2's tasks are stored separately
+- Affects any spec with nested resources where different parent IDs should have independent state
+- Flat paths (e.g., `/pets`, `/users`) are unaffected — they continue to work exactly as before
+
 ## [0.3.5] - 2026-04-13
 
 ### Fixed

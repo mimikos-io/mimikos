@@ -169,7 +169,7 @@ func TestStatefulPipeline_DeleteThenGetReturns404(t *testing.T) {
 	h := newStatefulPipelineHandler(store)
 
 	// Pre-populate a resource directly.
-	require.NoError(t, store.Put("pets", "42", map[string]any{"id": float64(42), "name": "Fido"}))
+	require.NoError(t, store.Put("pets", "", "42", map[string]any{"id": float64(42), "name": "Fido"}))
 
 	// DELETE the resource.
 	delRec := httptest.NewRecorder()
@@ -227,7 +227,7 @@ func TestStatefulPipeline_XMimikosStatusOverridesState(t *testing.T) {
 	h := newStatefulPipelineHandler(store)
 
 	// Pre-populate a resource.
-	require.NoError(t, store.Put("pets", "42", map[string]any{"id": float64(42), "name": "Fido"}))
+	require.NoError(t, store.Put("pets", "", "42", map[string]any{"id": float64(42), "name": "Fido"}))
 
 	// GET with X-Mimikos-Status: 404 should return deterministic 404,
 	// not the stored resource.
@@ -239,7 +239,7 @@ func TestStatefulPipeline_XMimikosStatusOverridesState(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, getRec.Code)
 
 	// Resource should still be in the store (no state mutation).
-	_, found := store.Get("pets", "42")
+	_, found := store.Get("pets", "", "42")
 	assert.True(t, found, "X-Mimikos-Status must not mutate state")
 }
 
@@ -318,7 +318,7 @@ func TestStatefulPipeline_UpdateMergesThroughPipeline(t *testing.T) {
 	h := newStatefulPipelineHandler(store)
 
 	// Pre-populate.
-	require.NoError(t, store.Put("pets", "42", map[string]any{
+	require.NoError(t, store.Put("pets", "", "42", map[string]any{
 		"id": float64(42), "name": "Fido", "owner": "Alice",
 	}))
 
@@ -354,7 +354,7 @@ func BenchmarkStatefulPipeline_GetFetch(b *testing.B) {
 	)
 
 	// Pre-populate.
-	_ = store.Put("pets", "42", map[string]any{"id": float64(42), "name": "Fido"})
+	_ = store.Put("pets", "", "42", map[string]any{"id": float64(42), "name": "Fido"})
 
 	b.ResetTimer()
 
