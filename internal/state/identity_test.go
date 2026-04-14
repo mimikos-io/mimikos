@@ -384,3 +384,84 @@ func TestLeafCollection(t *testing.T) {
 		})
 	}
 }
+
+// --- Parent scope extraction ---
+
+func TestParentScope(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		path   string
+		params map[string]string
+		want   string
+	}{
+		{
+			name:   "flat collection — no params",
+			path:   "/pets",
+			params: nil,
+			want:   "",
+		},
+		{
+			name:   "flat item — trailing param stripped",
+			path:   "/pets/{petId}",
+			params: map[string]string{"petId": "1"},
+			want:   "",
+		},
+		{
+			name:   "single parent — collection path",
+			path:   "/projects/{gid}/tasks",
+			params: map[string]string{"gid": "proj-1"},
+			want:   "proj-1",
+		},
+		{
+			name:   "single parent — item path",
+			path:   "/projects/{gid}/tasks/{task_id}",
+			params: map[string]string{"gid": "proj-1", "task_id": "t-abc"},
+			want:   "proj-1",
+		},
+		{
+			name:   "two parents",
+			path:   "/orgs/{orgId}/projects/{projId}/tasks/{taskId}",
+			params: map[string]string{"orgId": "o1", "projId": "p2", "taskId": "t3"},
+			want:   "o1/p2",
+		},
+		{
+			name:   "missing param value — skipped",
+			path:   "/projects/{gid}/tasks",
+			params: map[string]string{},
+			want:   "",
+		},
+		{
+			name:   "nil params",
+			path:   "/projects/{gid}/tasks/{tid}",
+			params: nil,
+			want:   "",
+		},
+		{
+			name:   "versioned nested",
+			path:   "/v1/users/{userId}/orders/{orderId}",
+			params: map[string]string{"userId": "u1", "orderId": "o1"},
+			want:   "u1",
+		},
+		{
+			name:   "empty path",
+			path:   "",
+			params: nil,
+			want:   "",
+		},
+		{
+			name:   "deeply nested collection",
+			path:   "/orgs/{orgId}/teams/{teamId}/members",
+			params: map[string]string{"orgId": "o1", "teamId": "t2"},
+			want:   "o1/t2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, ParentScope(tt.path, tt.params))
+		})
+	}
+}

@@ -83,8 +83,9 @@ func (h *Handler) handleCreate(
 
 	pathParams := extractPathParams(r, entry.PathPattern)
 	resourceType, resourceID := state.InferResourceIdentity(entry.PathPattern, pathParams, resource, entry.IDFieldHint)
+	scope := state.ParentScope(entry.PathPattern, pathParams)
 
-	if err := h.store.Put(resourceType, resourceID, resource); err != nil {
+	if err := h.store.Put(resourceType, scope, resourceID, resource); err != nil {
 		writeProblem(w, http.StatusInternalServerError, "failed to store resource: "+err.Error())
 
 		return
@@ -103,8 +104,9 @@ func (h *Handler) handleFetch(
 ) {
 	pathParams := extractPathParams(r, entry.PathPattern)
 	resourceType, resourceID := state.InferResourceIdentity(entry.PathPattern, pathParams, nil, entry.IDFieldHint)
+	scope := state.ParentScope(entry.PathPattern, pathParams)
 
-	data, found := h.store.Get(resourceType, resourceID)
+	data, found := h.store.Get(resourceType, scope, resourceID)
 	if !found {
 		writeStatefulNotFound(w, resourceType, resourceID)
 
@@ -125,8 +127,10 @@ func (h *Handler) handleList(
 	gen *generator.DataGenerator,
 	body []byte,
 ) {
+	pathParams := extractPathParams(r, entry.PathPattern)
 	resourceType := state.ResourceType(entry.PathPattern)
-	items := h.store.List(resourceType)
+	scope := state.ParentScope(entry.PathPattern, pathParams)
+	items := h.store.List(resourceType, scope)
 
 	if entry.ListArrayKey == "" {
 		// Bare array (Petstore, GitHub).
@@ -192,8 +196,9 @@ func (h *Handler) handleUpdate(
 ) {
 	pathParams := extractPathParams(r, entry.PathPattern)
 	resourceType, resourceID := state.InferResourceIdentity(entry.PathPattern, pathParams, nil, entry.IDFieldHint)
+	scope := state.ParentScope(entry.PathPattern, pathParams)
 
-	stored, found := h.store.Get(resourceType, resourceID)
+	stored, found := h.store.Get(resourceType, scope, resourceID)
 	if !found {
 		writeStatefulNotFound(w, resourceType, resourceID)
 
@@ -211,7 +216,7 @@ func (h *Handler) handleUpdate(
 
 	merged := shallowMerge(stored, patch)
 
-	if putErr := h.store.Put(resourceType, resourceID, merged); putErr != nil {
+	if putErr := h.store.Put(resourceType, scope, resourceID, merged); putErr != nil {
 		writeProblem(w, http.StatusInternalServerError, "failed to store resource: "+putErr.Error())
 
 		return
@@ -254,8 +259,9 @@ func (h *Handler) handleDelete(
 ) {
 	pathParams := extractPathParams(r, entry.PathPattern)
 	resourceType, resourceID := state.InferResourceIdentity(entry.PathPattern, pathParams, nil, entry.IDFieldHint)
+	scope := state.ParentScope(entry.PathPattern, pathParams)
 
-	if !h.store.Delete(resourceType, resourceID) {
+	if !h.store.Delete(resourceType, scope, resourceID) {
 		writeStatefulNotFound(w, resourceType, resourceID)
 
 		return

@@ -723,6 +723,139 @@ func TestStatefulE2E_Asana_NestedResourceNamespace(t *testing.T) {
 	assert.Empty(t, nestedItems, "/projects/{gid}/tasks has separate namespace — should be empty")
 }
 
+// --- Parent Scope Isolation Tests (e2e-stateful-test.yaml) ---
+//
+// Verify that resources under different parent paths are isolated.
+// POST /organizations/org1/teams and POST /organizations/org2/teams
+// must produce separate state — listing org1's teams must not include org2's.
+
+func TestStatefulE2E_ParentScopeIsolation(t *testing.T) {
+	skipIfShort(t)
+
+	srv := buildStatefulServer(t, "e2e-stateful-test.yaml", 0)
+	defer srv.Close()
+
+	// Create a team under org1.
+	create1 := doJSONRequest(t, srv, http.MethodPost, "/organizations/org1/teams",
+		`{"name": "Alpha Team"}`)
+	defer closeBody(t, create1)
+
+	require.Equal(t, http.StatusCreated, create1.StatusCode)
+
+	// Create a team under org2.
+	create2 := doJSONRequest(t, srv, http.MethodPost, "/organizations/org2/teams",
+		`{"name": "Beta Team"}`)
+	defer closeBody(t, create2)
+
+	require.Equal(t, http.StatusCreated, create2.StatusCode)
+
+	// List org1's teams — should see only Alpha.
+	list1 := doRequest(t, srv, http.MethodGet, "/organizations/org1/teams")
+	defer closeBody(t, list1)
+
+	require.Equal(t, http.StatusOK, list1.StatusCode)
+
+	var items1 []any
+	decodeJSON(t, list1, &items1)
+
+	assert.Len(t, items1, 1, "org1 should have exactly 1 team")
+
+	// List org2's teams — should see only Beta.
+	list2 := doRequest(t, srv, http.MethodGet, "/organizations/org2/teams")
+	defer closeBody(t, list2)
+
+	require.Equal(t, http.StatusOK, list2.StatusCode)
+
+	var items2 []any
+	decodeJSON(t, list2, &items2)
+
+	assert.Len(t, items2, 1, "org2 should have exactly 1 team")
+
+	// List org3 (never had a POST) — should be empty.
+	list3 := doRequest(t, srv, http.MethodGet, "/organizations/org3/teams")
+	defer closeBody(t, list3)
+
+	require.Equal(t, http.StatusOK, list3.StatusCode)
+
+	var items3 []any
+	decodeJSON(t, list3, &items3)
+
+	assert.Empty(t, items3, "org3 should have no teams")
+}
+
+func TestStatefulE2E_ParentScopeFetchDelete(t *testing.T) {
+	skipIfShort(t)
+
+	srv := buildStatefulServer(t, "e2e-stateful-test.yaml", 0)
+	defer srv.Close()
+
+	// Create a team under org1.
+	createResp := doJSONRequest(t, srv, http.MethodPost, "/organizations/org1/teams",
+		`{"name": "Delta Team"}`)
+	defer closeBody(t, createResp)
+
+	require.Equal(t, http.StatusCreated, createResp.StatusCode)
+
+	var created map[string]any
+	decodeJSON(t, createResp, &created)
+
+	teamID := coerceID(t, created["id"])
+
+	// Fetch under org1 — should find it.
+	fetch1 := doRequest(t, srv, http.MethodGet, "/organizations/org1/teams/"+teamID)
+	defer closeBody(t, fetch1)
+
+	assert.Equal(t, http.StatusOK, fetch1.StatusCode)
+
+	// Fetch under org2 — should NOT find it (different scope).
+	fetch2 := doRequest(t, srv, http.MethodGet, "/organizations/org2/teams/"+teamID)
+	defer closeBody(t, fetch2)
+
+	assert.Equal(t, http.StatusNotFound, fetch2.StatusCode,
+		"team created under org1 should not be visible under org2")
+
+	// Update under org1 — should succeed.
+	upd1 := doJSONRequest(t, srv, http.MethodPut, "/organizations/org1/teams/"+teamID,
+		`{"name": "Delta Team Updated"}`)
+	defer closeBody(t, upd1)
+
+	assert.Equal(t, http.StatusOK, upd1.StatusCode,
+		"update under correct org should succeed")
+
+	var updated map[string]any
+	decodeJSON(t, upd1, &updated)
+
+	assert.Equal(t, "Delta Team Updated", updated["name"])
+
+	// Update under org2 — should 404 (resource is in org1's scope).
+	upd2 := doJSONRequest(t, srv, http.MethodPut, "/organizations/org2/teams/"+teamID,
+		`{"name": "Should Fail"}`)
+	defer closeBody(t, upd2)
+
+	assert.Equal(t, http.StatusNotFound, upd2.StatusCode,
+		"update under wrong org should return 404")
+
+	// Delete under org2 — should fail (not found in that scope).
+	del2 := doRequest(t, srv, http.MethodDelete, "/organizations/org2/teams/"+teamID)
+	defer closeBody(t, del2)
+
+	assert.Equal(t, http.StatusNotFound, del2.StatusCode,
+		"delete under wrong org should return 404")
+
+	// Delete under org1 — should succeed.
+	del1 := doRequest(t, srv, http.MethodDelete, "/organizations/org1/teams/"+teamID)
+	defer closeBody(t, del1)
+
+	assert.Equal(t, http.StatusNoContent, del1.StatusCode)
+
+	// Verify deleted from org1.
+	fetchAfter := doRequest(t, srv, http.MethodGet, "/organizations/org1/teams/"+teamID)
+	defer closeBody(t, fetchAfter)
+
+	assert.Equal(t, http.StatusNotFound, fetchAfter.StatusCode,
+		"team should be gone after delete")
+}
+
 // --- Targeted Pattern Tests (e2e-stateful-test.yaml) ---
 //
 // These test patterns not covered by Petstore (flat + bare array + "id") or

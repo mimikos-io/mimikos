@@ -8,17 +8,19 @@ import (
 
 // entry wraps stored resource data with LRU tracking metadata.
 type entry struct {
-	resourceType string
-	id           string
-	data         any
-	element      *list.Element
+	namespace string
+	scope     string
+	id        string
+	data      any
+	element   *list.Element
 }
 
 // InMemory is an in-memory Store implementation with LRU eviction.
 // It is safe for concurrent use. All state is lost on server restart.
+// Resources are stored in a three-level map: namespace → scope → id.
 type InMemory struct {
 	mu        sync.Mutex
-	resources map[string]map[string]*entry
+	resources map[string]map[string]map[string]*entry // [namespace][scope][id]
 	lru       *list.List
 	capacity  int
 }
@@ -31,23 +33,28 @@ func NewInMemory(capacity int) *InMemory {
 	}
 
 	return &InMemory{
-		resources: make(map[string]map[string]*entry),
+		resources: make(map[string]map[string]map[string]*entry),
 		lru:       list.New(),
 		capacity:  capacity,
 	}
 }
 
 // Get retrieves a stored resource and refreshes its LRU position.
-func (m *InMemory) Get(resourceType, id string) (any, bool) {
+func (m *InMemory) Get(namespace, scope, id string) (any, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	resourceEntries, ok := m.resources[resourceType]
+	scopeEntries, ok := m.resources[namespace]
 	if !ok {
 		return nil, false
 	}
 
-	entry, ok := resourceEntries[id]
+	idEntries, ok := scopeEntries[scope]
+	if !ok {
+		return nil, false
+	}
+
+	entry, ok := idEntries[id]
 	if !ok {
 		return nil, false
 	}
@@ -58,85 +65,109 @@ func (m *InMemory) Get(resourceType, id string) (any, bool) {
 }
 
 // Put stores a resource, creating or replacing any existing resource with the
-// same type and id. If the store is at capacity, the least recently used
-// resource is evicted.
-func (m *InMemory) Put(resourceType, id string, data any) error {
+// same namespace, scope, and id. If the store is at capacity, the least
+// recently used resource is evicted.
+func (m *InMemory) Put(namespace, scope, id string, data any) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Update existing entry (fast path).
-	if resourceEntries, ok := m.resources[resourceType]; ok {
-		if entry, exists := resourceEntries[id]; exists {
-			entry.data = data
-			m.lru.MoveToFront(entry.element)
+	if scopeEntries, ok := m.resources[namespace]; ok {
+		if idEntries, ok := scopeEntries[scope]; ok {
+			if entry, exists := idEntries[id]; exists {
+				entry.data = data
+				m.lru.MoveToFront(entry.element)
 
-			return nil
+				return nil
+			}
 		}
 	}
 
-	// Evict if at capacity. Must happen before we resolve resourceEntries — eviction
-	// may delete a type's map, invalidating any earlier local reference.
+	// Evict if at capacity. Must happen before we resolve maps — eviction
+	// may delete intermediate maps, invalidating any earlier local reference.
 	if m.capacity > 0 && m.lru.Len() >= m.capacity {
 		m.evict()
 	}
 
-	resourceEntries, ok := m.resources[resourceType]
+	scopeEntries, ok := m.resources[namespace]
 	if !ok {
-		resourceEntries = make(map[string]*entry)
-		m.resources[resourceType] = resourceEntries
+		scopeEntries = make(map[string]map[string]*entry)
+		m.resources[namespace] = scopeEntries
+	}
+
+	idEntries, ok := scopeEntries[scope]
+	if !ok {
+		idEntries = make(map[string]*entry)
+		scopeEntries[scope] = idEntries
 	}
 
 	e := &entry{
-		resourceType: resourceType,
-		id:           id,
-		data:         data,
+		namespace: namespace,
+		scope:     scope,
+		id:        id,
+		data:      data,
 	}
 	e.element = m.lru.PushFront(e)
-	resourceEntries[id] = e
+	idEntries[id] = e
 
 	return nil
 }
 
 // Delete removes a resource. Returns true if the resource existed.
-func (m *InMemory) Delete(resourceType, id string) bool {
+func (m *InMemory) Delete(namespace, scope, id string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	resourceEntries, ok := m.resources[resourceType]
+	scopeEntries, ok := m.resources[namespace]
 	if !ok {
 		return false
 	}
 
-	entry, ok := resourceEntries[id]
+	idEntries, ok := scopeEntries[scope]
+	if !ok {
+		return false
+	}
+
+	entry, ok := idEntries[id]
 	if !ok {
 		return false
 	}
 
 	m.lru.Remove(entry.element)
-	delete(resourceEntries, id)
+	delete(idEntries, id)
 
-	if len(resourceEntries) == 0 {
-		delete(m.resources, resourceType)
+	// Clean up empty intermediate maps.
+	if len(idEntries) == 0 {
+		delete(scopeEntries, scope)
+	}
+
+	if len(scopeEntries) == 0 {
+		delete(m.resources, namespace)
 	}
 
 	return true
 }
 
-// List returns all stored resources of the given type, sorted by resource ID
-// for deterministic ordering. Returns an empty slice (not nil) if no resources
-// of that type exist.
-func (m *InMemory) List(resourceType string) []any {
+// List returns all stored resources matching the given namespace and scope,
+// sorted by resource ID for deterministic ordering. Returns an empty slice
+// (not nil) if no matching resources exist.
+func (m *InMemory) List(namespace, scope string) []any {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	resourceEntries := m.resources[resourceType]
-	if len(resourceEntries) == 0 {
+	scopeEntries := m.resources[namespace]
+	if len(scopeEntries) == 0 {
+		return make([]any, 0)
+	}
+
+	idEntries := scopeEntries[scope]
+	if len(idEntries) == 0 {
 		return make([]any, 0)
 	}
 
 	// Collect entries and sort by ID for deterministic iteration order.
-	sorted := make([]*entry, 0, len(resourceEntries))
-	for _, e := range resourceEntries {
+	sorted := make([]*entry, 0, len(idEntries))
+	for _, e := range idEntries {
 		sorted = append(sorted, e)
 	}
 
@@ -165,7 +196,7 @@ func (m *InMemory) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.resources = make(map[string]map[string]*entry)
+	m.resources = make(map[string]map[string]map[string]*entry)
 	m.lru.Init()
 }
 
@@ -176,15 +207,19 @@ func (m *InMemory) evict() {
 		return
 	}
 
-	entry, _ := back.Value.(*entry)
+	e, _ := back.Value.(*entry)
 	m.lru.Remove(back)
 
-	resourceEntries := m.resources[entry.resourceType]
-	delete(resourceEntries, entry.id)
+	scopeEntries := m.resources[e.namespace]
+	idEntries := scopeEntries[e.scope]
+	delete(idEntries, e.id)
 
-	// Remove the type's map when its last entry is evicted to avoid
-	// accumulating empty maps in m.resources across eviction cycles.
-	if len(resourceEntries) == 0 {
-		delete(m.resources, entry.resourceType)
+	// Clean up empty intermediate maps to avoid accumulating empties.
+	if len(idEntries) == 0 {
+		delete(scopeEntries, e.scope)
+	}
+
+	if len(scopeEntries) == 0 {
+		delete(m.resources, e.namespace)
 	}
 }

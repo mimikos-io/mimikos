@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -117,7 +118,7 @@ func genericEntry() model.BehaviorEntry {
 // storeResource creates a resource directly in the store.
 func storeResource(t *testing.T, s state.Store, resType, id string, data map[string]any) {
 	t.Helper()
-	require.NoError(t, s.Put(resType, id, data))
+	require.NoError(t, s.Put(resType, "", id, data))
 }
 
 // statefulMuxResult holds the captured response from a mux-dispatched stateful call.
@@ -311,7 +312,7 @@ func TestStateful_UpdateMergesFields(t *testing.T) {
 	assert.InDelta(t, float64(42), body["id"], 0)
 
 	// Store should match the response.
-	stored, found := store.Get("pets", "42")
+	stored, found := store.Get("pets", "", "42")
 	require.True(t, found)
 
 	storedMap, ok := stored.(map[string]any)
@@ -340,7 +341,7 @@ func TestStateful_DeleteRemoves(t *testing.T) {
 	assert.Empty(t, result.recorder.Body.Bytes())
 
 	// Verify removal.
-	_, found := store.Get("pets", "42")
+	_, found := store.Get("pets", "", "42")
 	assert.False(t, found, "resource should be deleted from store")
 }
 
@@ -372,7 +373,7 @@ func TestStateful_DeleteNon204SuccessCode(t *testing.T) {
 	assert.NotEmpty(t, body, "non-204 delete should have response body")
 
 	// Verify removal.
-	_, found := store.Get("projects", "abc")
+	_, found := store.Get("projects", "", "abc")
 	assert.False(t, found, "resource should be deleted from store")
 }
 
@@ -383,6 +384,122 @@ func TestStateful_DeleteMissing404(t *testing.T) {
 		"", deleteEntry(), store)
 
 	assert.Equal(t, http.StatusNotFound, result.recorder.Code)
+}
+
+// --- Nested path scope isolation (unit-level) ---
+
+func TestStateful_NestedCreate_ScopesByParent(t *testing.T) {
+	store := state.NewInMemory(100)
+
+	nestedCreate := model.BehaviorEntry{
+		Method:      http.MethodPost,
+		PathPattern: "/orgs/{orgId}/teams",
+		Type:        model.BehaviorCreate,
+		SuccessCode: http.StatusCreated,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusCreated: {Name: "Team", Schema: petObjectSchema()},
+		},
+		Source:     model.SourceHeuristic,
+		Confidence: 0.9,
+	}
+
+	// Create a team under org1.
+	result1 := serveStatefulViaMux(t, http.MethodPost, "/orgs/{orgId}/teams",
+		"/orgs/org1/teams", `{"name":"Alpha"}`, nestedCreate, store)
+
+	require.True(t, result1.handled)
+	assert.Equal(t, http.StatusCreated, result1.recorder.Code)
+	assert.Equal(t, 1, store.Count())
+
+	// Create a team under org2.
+	result2 := serveStatefulViaMux(t, http.MethodPost, "/orgs/{orgId}/teams",
+		"/orgs/org2/teams", `{"name":"Beta"}`, nestedCreate, store)
+
+	require.True(t, result2.handled)
+	assert.Equal(t, http.StatusCreated, result2.recorder.Code)
+	assert.Equal(t, 2, store.Count())
+
+	// List org1 — should see only 1 item.
+	nestedList := model.BehaviorEntry{
+		Method:      http.MethodGet,
+		PathPattern: "/orgs/{orgId}/teams",
+		Type:        model.BehaviorList,
+		SuccessCode: http.StatusOK,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusOK: {Name: "TeamList", Schema: petArraySchema()},
+		},
+		Source:     model.SourceHeuristic,
+		Confidence: 0.9,
+	}
+
+	listResult := serveStatefulViaMux(t, http.MethodGet, "/orgs/{orgId}/teams",
+		"/orgs/org1/teams", "", nestedList, store)
+
+	require.True(t, listResult.handled)
+	assert.Equal(t, http.StatusOK, listResult.recorder.Code)
+
+	var items []any
+	require.NoError(t, json.Unmarshal(listResult.recorder.Body.Bytes(), &items))
+	assert.Len(t, items, 1, "org1 scope should have exactly 1 team, not 2")
+}
+
+func TestStateful_NestedFetch_WrongScope404(t *testing.T) {
+	store := state.NewInMemory(100)
+
+	nestedCreate := model.BehaviorEntry{
+		Method:      http.MethodPost,
+		PathPattern: "/orgs/{orgId}/teams",
+		Type:        model.BehaviorCreate,
+		SuccessCode: http.StatusCreated,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusCreated: {Name: "Team", Schema: petObjectSchema()},
+		},
+		Source:     model.SourceHeuristic,
+		Confidence: 0.9,
+	}
+
+	// Create under org1.
+	result := serveStatefulViaMux(t, http.MethodPost, "/orgs/{orgId}/teams",
+		"/orgs/org1/teams", `{"name":"Alpha"}`, nestedCreate, store)
+
+	require.True(t, result.handled)
+
+	var created map[string]any
+	require.NoError(t, json.Unmarshal(result.recorder.Body.Bytes(), &created))
+	require.Contains(t, created, "id")
+
+	id := created["id"]
+
+	var idStr string
+
+	switch v := id.(type) {
+	case float64:
+		idStr = strconv.FormatInt(int64(v), 10)
+	case string:
+		idStr = v
+	default:
+		t.Fatalf("unexpected id type: %T", id)
+	}
+
+	nestedFetch := model.BehaviorEntry{
+		Method:      http.MethodGet,
+		PathPattern: "/orgs/{orgId}/teams/{teamId}",
+		Type:        model.BehaviorFetch,
+		SuccessCode: http.StatusOK,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusOK: {Name: "Team", Schema: petObjectSchema()},
+		},
+		Source:     model.SourceHeuristic,
+		Confidence: 0.9,
+	}
+
+	// Fetch under org2 — should 404 (resource is in org1's scope).
+	fetchResult := serveStatefulViaMux(t, http.MethodGet, "/orgs/{orgId}/teams/{teamId}",
+		"/orgs/org2/teams/"+idStr, "", nestedFetch, store)
+
+	require.True(t, fetchResult.handled)
+	assert.Equal(t, http.StatusNotFound, fetchResult.recorder.Code,
+		"fetch under wrong parent scope should return 404")
 }
 
 func TestStateful_GenericNotHandled(t *testing.T) {
@@ -591,7 +708,7 @@ func TestShallowMerge_CloneSafety(t *testing.T) {
 
 func TestShallowMerge_ConcurrentSafety(t *testing.T) {
 	store := state.NewInMemory(100)
-	require.NoError(t, store.Put("pets", "1", map[string]any{
+	require.NoError(t, store.Put("pets", "", "1", map[string]any{
 		"id": float64(1), "name": "Fido", "count": float64(0),
 	}))
 
@@ -604,14 +721,14 @@ func TestShallowMerge_ConcurrentSafety(t *testing.T) {
 		go func(n int) {
 			defer func() { done <- struct{}{} }()
 
-			stored, found := store.Get("pets", "1")
+			stored, found := store.Get("pets", "", "1")
 			if !found {
 				return
 			}
 
 			patch := map[string]any{"count": float64(n)}
 			merged := shallowMerge(stored, patch)
-			_ = store.Put("pets", "1", merged)
+			_ = store.Put("pets", "", "1", merged)
 		}(i)
 	}
 
@@ -620,7 +737,7 @@ func TestShallowMerge_ConcurrentSafety(t *testing.T) {
 	}
 
 	// Final state should be consistent (some goroutine's value wins).
-	result, found := store.Get("pets", "1")
+	result, found := store.Get("pets", "", "1")
 	require.True(t, found)
 
 	resultMap, ok := result.(map[string]any)
@@ -697,7 +814,7 @@ func TestHandleStatefulMode_DegradedCreate_WithExample_ServesExample(t *testing.
 
 func TestHandleStatefulMode_DegradedFetch_StillWorks(t *testing.T) {
 	store := state.NewInMemory(100)
-	_ = store.Put("reports", "42", map[string]any{"id": "42", "status": "done"})
+	_ = store.Put("reports", "", "42", map[string]any{"id": "42", "status": "done"})
 	h := newStatefulTestHandler(store)
 	gen := newStatefulGen()
 
