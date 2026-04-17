@@ -206,7 +206,17 @@ func (p *LibopenAPIParser) extractRequestBody(
 	}
 
 	required := op.RequestBody.Required != nil && *op.RequestBody.Required
-	inlinePointer := pathPointer + "/requestBody/content/" + encodeJSONPointerToken(contentType) + "/schema"
+
+	// If the request body was a $ref (e.g., "#/components/requestBodies/ItemCreate"),
+	// the schema pointer must be relative to the component request body, not the path.
+	// The high-level GetReference() returns "" after resolution; the original
+	// $ref string is only available via GoLow().
+	basePointer := pathPointer + "/requestBody"
+	if low := op.RequestBody.GoLow(); low != nil && low.IsReference() {
+		basePointer = low.GetReference()
+	}
+
+	inlinePointer := basePointer + "/content/" + encodeJSONPointerToken(contentType) + "/schema"
 
 	return &RequestBody{
 		Required: required,
@@ -245,7 +255,19 @@ func (p *LibopenAPIParser) extractResponses(
 				Description: v3Resp.Description,
 			}
 
+			// If the response was a $ref (e.g., "#/components/responses/Forbidden"),
+			// the schema pointer must be relative to the component response, not the path.
+			// libopenapi resolves the $ref to give us the full response object, but the
+			// raw spec still has the $ref at the path level — so the compiler needs
+			// the component pointer to find the schema.
+			//
+			// The high-level GetReference() returns "" after resolution; the original
+			// $ref string is only available via GoLow().
 			schemaPointer := pathPointer + "/responses/" + codePair.Key
+			if low := v3Resp.GoLow(); low != nil && low.IsReference() {
+				schemaPointer = low.GetReference()
+			}
+
 			p.extractResponseContent(resp, v3Resp.Content, circularSet, schemaPointer, op.OperationId, codePair.Key)
 
 			responses[code] = resp
@@ -263,6 +285,10 @@ func (p *LibopenAPIParser) extractResponses(
 		}
 
 		schemaPointer := pathPointer + "/responses/default"
+		if low := v3Default.GoLow(); low != nil && low.IsReference() {
+			schemaPointer = low.GetReference()
+		}
+
 		p.extractResponseContent(defaultResp, v3Default.Content, circularSet, schemaPointer, op.OperationId, "default")
 	}
 

@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.7] - 2026-04-17
+
+### Fixed
+
+#### Response-Level $ref Pointer Construction
+- Specs using `$ref` at the response level (e.g., `$ref: "#/components/responses/Forbidden"`) now work correctly
+- Previously, the parser built schema pointers relative to the path instead of the component response — the compiler couldn't find the schema, degrading the endpoint to a 500 error
+- Also fixes the same issue for request body `$ref` (e.g., `$ref: "#/components/requestBodies/ItemCreate"`) and default response `$ref`
+- This was the highest-impact bug: ~250+ endpoints across GitHub (~91), Spotify (~100), and SendGrid (~60) were unnecessarily degraded
+- Any spec using shared error responses via `$ref` (extremely common pattern) will see immediate improvement
+
 ## [0.3.6] - 2026-04-14
 
 ### Fixed

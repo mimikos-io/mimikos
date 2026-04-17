@@ -975,3 +975,155 @@ paths:
 	require.NotNil(t, ref)
 	assert.Equal(t, "#/paths/~1items/get/responses/200/content/application~1vnd.api+json/schema", ref.Pointer)
 }
+
+// --- Response-Level $ref Compilation ---
+
+func TestCompile_ResponseRefSchema(t *testing.T) {
+	// Spec uses $ref at the response level. The parser produces component-based
+	// pointers. The compiler must successfully compile those pointers.
+	specBytes := []byte(`openapi: "3.0.0"
+info:
+  title: Response Ref Compile Test
+  version: "1.0"
+paths:
+  /items/{id}:
+    get:
+      operationId: getItem
+      responses:
+        "200":
+          description: An item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Item"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+components:
+  schemas:
+    Item:
+      type: object
+      properties:
+        id:
+          type: integer
+    ErrorObject:
+      type: object
+      properties:
+        message:
+          type: string
+  responses:
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                $ref: "#/components/schemas/ErrorObject"
+    TooManyRequests:
+      description: Too many requests
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                $ref: "#/components/schemas/ErrorObject"`)
+
+	spec := parseInlineSpec(t, specBytes)
+	sc, err := New(specBytes, spec.Version)
+	require.NoError(t, err)
+
+	op := spec.Operations[0]
+
+	t.Run("200_schema_ref_compiles", func(t *testing.T) {
+		ref := op.Responses[200].Schema
+		require.NotNil(t, ref)
+
+		compiled, err := sc.Compile(ref.Pointer, ref.Name, ref.IsCircular)
+		require.NoError(t, err)
+		require.NotNil(t, compiled)
+
+		valid := unmarshalJSON(t, `{"id": 42}`)
+		require.NoError(t, compiled.Validate(valid))
+	})
+
+	t.Run("403_response_ref_compiles", func(t *testing.T) {
+		ref := op.Responses[403].Schema
+		require.NotNil(t, ref)
+		assert.Contains(t, ref.Pointer, "#/components/responses/Forbidden",
+			"pointer should be component-based, not path-based")
+
+		compiled, err := sc.Compile(ref.Pointer, ref.Name, ref.IsCircular)
+		require.NoError(t, err, "compilation must succeed for response-level $ref pointer")
+		require.NotNil(t, compiled)
+
+		valid := unmarshalJSON(t, `{"error": {"message": "forbidden"}}`)
+		require.NoError(t, compiled.Validate(valid))
+	})
+
+	t.Run("429_response_ref_compiles", func(t *testing.T) {
+		ref := op.Responses[429].Schema
+		require.NotNil(t, ref)
+
+		compiled, err := sc.Compile(ref.Pointer, ref.Name, ref.IsCircular)
+		require.NoError(t, err, "compilation must succeed for response-level $ref pointer")
+		require.NotNil(t, compiled)
+	})
+}
+
+func TestCompile_RequestBodyRefSchema(t *testing.T) {
+	// Spec uses $ref at the request body level.
+	specBytes := []byte(`openapi: "3.0.0"
+info:
+  title: RequestBody Ref Compile Test
+  version: "1.0"
+paths:
+  /items:
+    post:
+      operationId: createItem
+      requestBody:
+        $ref: "#/components/requestBodies/ItemCreate"
+      responses:
+        "201":
+          description: Created
+components:
+  requestBodies:
+    ItemCreate:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              name:
+                type: string
+            required:
+              - name`)
+
+	spec := parseInlineSpec(t, specBytes)
+	sc, err := New(specBytes, spec.Version)
+	require.NoError(t, err)
+
+	op := spec.Operations[0]
+	require.NotNil(t, op.RequestBody)
+	require.NotNil(t, op.RequestBody.Schema)
+
+	ref := op.RequestBody.Schema
+	assert.Contains(t, ref.Pointer, "#/components/requestBodies/ItemCreate",
+		"pointer should be component-based, not path-based")
+
+	compiled, err := sc.Compile(ref.Pointer, ref.Name, ref.IsCircular)
+	require.NoError(t, err, "compilation must succeed for request body $ref pointer")
+	require.NotNil(t, compiled)
+
+	// Valid request body.
+	valid := unmarshalJSON(t, `{"name": "Widget"}`)
+	require.NoError(t, compiled.Validate(valid))
+
+	// Missing required field.
+	invalid := unmarshalJSON(t, `{}`)
+	require.Error(t, compiled.Validate(invalid))
+}
