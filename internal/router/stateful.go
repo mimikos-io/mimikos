@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"regexp"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -61,8 +62,13 @@ func (h *Handler) handleStatefulMode(
 	return true
 }
 
-// handleCreate generates a response body from the schema, stores the unwrapped
-// resource, and writes the original (potentially wrapped) response.
+// handleCreate builds a response using a three-layer merge pipeline, stores
+// the unwrapped resource, and writes the (potentially wrapped) response.
+//
+// The layers are applied in priority order (last wins):
+//  1. Faker base — generate all fields from schema (provides unique IDs)
+//  2. Example overlay — realistic defaults from spec author (ID-protected)
+//  3. Request body overlay — user intent wins over everything
 func (h *Handler) handleCreate(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -73,13 +79,40 @@ func (h *Handler) handleCreate(
 	scenario := selectSuccess(&entry)
 	seed := generator.Fingerprint(r.Method, r.URL.Path, r.URL.Query(), body)
 
-	responseBody, ok := h.generateResponseBody(w, gen, scenario, seed)
+	// Layer 1: faker base (or empty map if no schema).
+	fakerBase, ok := h.generateResponseBody(w, gen, scenario, seed)
 	if !ok {
 		return
 	}
 
+	merged := fakerBase
+
+	// Layer 2: example overlay with ID protection.
+	// When the schema is degraded (nil), faker produced an empty map — protecting
+	// ID fields would strip the example's ID leaving no ID at all. A static
+	// example ID is better than none when faker can't generate one.
+	if scenario.Example != nil {
+		exampleFields := exampleAsMap(scenario.Example, entry.WrapperKey)
+		if baseMap, ok := unwrapResource(fakerBase, entry.WrapperKey).(map[string]any); ok && len(exampleFields) > 0 {
+			if scenario.Schema == nil || scenario.Schema.Schema == nil {
+				merged = wrapResource(shallowMerge(baseMap, exampleFields), entry.WrapperKey)
+			} else {
+				idFields := buildIDFieldSet(entry)
+				merged = wrapResource(shallowMergeExcluding(baseMap, exampleFields, idFields), entry.WrapperKey)
+			}
+		}
+	}
+
+	// Layer 3: request body overlay (no exclusions — user intent wins).
+	reqFields, err := parseRequestBody(body, entry.WrapperKey)
+	if err == nil && len(reqFields) > 0 {
+		if resourceMap, ok := unwrapResource(merged, entry.WrapperKey).(map[string]any); ok {
+			merged = wrapResource(shallowMerge(resourceMap, reqFields), entry.WrapperKey)
+		}
+	}
+
 	// Unwrap for storage and identity extraction.
-	resource := unwrapResource(responseBody, entry.WrapperKey)
+	resource := unwrapResource(merged, entry.WrapperKey)
 
 	pathParams := extractPathParams(r, entry.PathPattern)
 	resourceType, resourceID := state.InferResourceIdentity(entry.PathPattern, pathParams, resource, entry.IDFieldHint)
@@ -91,8 +124,22 @@ func (h *Handler) handleCreate(
 		return
 	}
 
-	// Return the full generated response (wrapped if spec uses wrapper).
-	writeJSON(w, scenario.StatusCode, responseBody)
+	writeJSON(w, scenario.StatusCode, merged)
+}
+
+// exampleAsMap extracts the inner resource fields from a media-type example.
+// If the example is a wrapped object (e.g., {"data": {...}}), it unwraps
+// through the wrapper key and returns the inner map. Returns nil if the
+// example is not a map or the inner value is not a map.
+func exampleAsMap(example any, wrapperKey string) map[string]any {
+	inner := unwrapResource(example, wrapperKey)
+
+	m, ok := inner.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	return m
 }
 
 // handleFetch looks up a resource by ID from the path, re-wraps it if needed,
@@ -379,6 +426,54 @@ func parseRequestBody(body []byte, wrapperKey string) (map[string]any, error) {
 	}
 
 	return innerMap, nil
+}
+
+// buildIDFieldSet computes the set of field names that should be protected
+// from example overwrite during create. Mirrors strategies 1–4 of
+// [state.InferResourceIdentity] to determine which body fields hold IDs.
+// Strategies 5–6 (path param value, UUID fallback) are about reading IDs,
+// not field names, so they don't apply here.
+// All keys are stored lowercase for case-insensitive comparison.
+func buildIDFieldSet(entry model.BehaviorEntry) map[string]bool {
+	set := map[string]bool{"id": true} // Strategy 4: always protected.
+
+	lastParam := state.LastPathParam(entry.PathPattern)
+	if lastParam != "" {
+		set[strings.ToLower(lastParam)] = true // Strategy 1: exact match.
+
+		// Strategy 2: suffix strip.
+		leaf := state.LeafCollection(entry.PathPattern)
+		if remainder := state.StripResourcePrefix(lastParam, leaf); remainder != "" {
+			set[strings.ToLower(remainder)] = true
+		}
+	}
+
+	if entry.IDFieldHint != "" {
+		set[strings.ToLower(entry.IDFieldHint)] = true // Strategy 3: precomputed hint.
+	}
+
+	return set
+}
+
+// shallowMergeExcluding merges overlay onto base, skipping overlay keys that
+// appear in the exclude set (case-insensitive). Returns a new map — neither
+// base nor overlay is mutated. Used to merge example fields onto faker output
+// while protecting ID fields from static example values.
+func shallowMergeExcluding(base, overlay map[string]any, exclude map[string]bool) map[string]any {
+	clone := make(map[string]any, len(base)+len(overlay))
+	for k, v := range base {
+		clone[k] = v
+	}
+
+	for k, v := range overlay {
+		if exclude[strings.ToLower(k)] {
+			continue
+		}
+
+		clone[k] = v
+	}
+
+	return clone
 }
 
 // extractPathParams reads path parameter values from the request using chi's
