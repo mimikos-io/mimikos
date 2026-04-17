@@ -57,19 +57,18 @@ Response (201 Created):
 {
   "id": 6635,
   "metadata": {},
-  "name": "Sandy Yates",
+  "name": "Buddy",
   "status": {
     "reason": "jDKAKpGL",
     "type": "archived"
   },
-  "tag": "OCVSzZLR"
+  "tag": "dog"
 }
 ```
 
-Note: the response name is "Sandy Yates", not "Buddy" — Mimikos generates the response
-from the Pet response schema, not from your request body. The `tag` is a random string
-because the schema defines it as a plain `string` with no format, example, or semantic
-match. The `id` (6635) is what matters. Store it.
+Note: the response contains `"name": "Buddy"` and `"tag": "dog"` from your request body.
+Fields you didn't send (`id`, `metadata`, `status`) are generated from the schema. The
+`id` (6635) is server-generated and unique per create. Store it.
 
 ```bash
 # Create second pet
@@ -84,44 +83,18 @@ Response (201 Created):
 {
   "id": 2085,
   "metadata": {},
-  "name": "Connor Romero",
+  "name": "Luna",
   "status": {
     "since": "XNMhKMTw",
     "type": "active"
   },
-  "tag": "FiGjSHfY"
+  "tag": "cat"
 }
 ```
 
-**6. Optionally update with desired values:**
+Both pets have the names and tags we sent. IDs are unique and server-generated.
 
-If the user wants recognizable names:
-
-```bash
-curl -s -X PATCH http://localhost:8080/pets/6635 \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Buddy", "tag": "dog"}'
-```
-
-Response (200 OK):
-
-```json
-{
-  "id": 6635,
-  "metadata": {},
-  "name": "Buddy",
-  "status": {
-    "reason": "jDKAKpGL",
-    "type": "archived"
-  },
-  "tag": "dog"
-}
-```
-
-Now `name` is "Buddy" and `tag` is "dog" — the PATCH merged your values onto the stored
-resource. Other fields (`status`, `metadata`) are preserved from the original create.
-
-**7. Verify:**
+**6. Verify:**
 
 ```bash
 # List all pets
@@ -135,9 +108,9 @@ Response (200 OK):
   {
     "id": 2085,
     "metadata": {},
-    "name": "Connor Romero",
+    "name": "Luna",
     "status": { "since": "XNMhKMTw", "type": "active" },
-    "tag": "FiGjSHfY"
+    "tag": "cat"
   },
   {
     "id": 6635,
@@ -149,8 +122,8 @@ Response (200 OK):
 ]
 ```
 
-Two pets in the store. The list response is a bare JSON array (Petstore uses array-typed
-list responses, not object-wrapped).
+Two pets in the store with the names and tags we sent. The list response is a bare JSON
+array (Petstore uses array-typed list responses, not object-wrapped).
 
 ---
 
@@ -213,7 +186,7 @@ Response (201 Created) — truncated, actual response is much larger:
 {
   "data": {
     "gid": "12345",
-    "name": "Stuff to buy",
+    "name": "Website Redesign",
     "resource_type": "task",
     "archived": false,
     "color": "light-purple",
@@ -229,40 +202,14 @@ Response (201 Created) — truncated, actual response is much larger:
 }
 ```
 
-Note: the field values like `"Stuff to buy"`, `"Greg Sanchez"`, and `"12345"` come from
-`example` values defined in the Asana spec — not faker. Mimikos uses spec examples when
-available (precedence: const → enum → example → semantic → faker).
+Note: the `name` is `"Website Redesign"` — your request body value. Other fields like
+`"Greg Sanchez"` and `"12345"` come from `example` values defined in the Asana spec.
+The merge pipeline is: faker → spec examples → request body (last wins).
 
-The ID is inside the wrapper: `response.data.gid` = `"12345"`. Store it.
+The `gid` inside the wrapper is the server-generated ID (protected from example overwrite
+to keep IDs unique). Store it: `response.data.gid` = `"12345"`.
 
-**6. Optionally update with desired values:**
-
-```bash
-# Update the project name — wrapped request body
-curl -s -X PUT http://localhost:8080/projects/12345 \
-  -H "Content-Type: application/json" \
-  -d '{"data": {"name": "Website Redesign"}}'
-```
-
-Response (200 OK) — showing key fields only:
-
-```json
-{
-  "data": {
-    "gid": "12345",
-    "name": "Website Redesign",
-    "resource_type": "task",
-    "created_at": "2026-02-13T11:09:50Z",
-    "...": "... (other fields preserved from create)"
-  }
-}
-```
-
-The update handler unwraps `{"data": {...}}`, merges the inner fields onto the stored
-resource, then re-wraps the response. The `name` is now "Website Redesign" while all
-other fields are preserved.
-
-**7. Verify:**
+**6. Verify:**
 
 ```bash
 # List projects — response is wrapped in {data: [...]}

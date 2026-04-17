@@ -1136,6 +1136,120 @@ func TestStatefulE2E_Petstore_NotFoundRoute(t *testing.T) {
 	assert.Contains(t, resp.Header.Get("Content-Type"), "application/problem+json")
 }
 
+// --- Create Merge Tests ---
+
+func TestStatefulE2E_CreateMergesRequestBody(t *testing.T) {
+	skipIfShort(t)
+
+	srv := buildStatefulServer(t, "petstore-3.1.yaml", 0)
+	defer srv.Close()
+
+	// POST /pets with specific values.
+	createResp := doJSONRequest(t, srv, http.MethodPost, "/pets", `{"name": "Buddy", "tag": "dog"}`)
+	defer closeBody(t, createResp)
+
+	assert.Equal(t, http.StatusCreated, createResp.StatusCode)
+
+	var created map[string]any
+	decodeJSON(t, createResp, &created)
+
+	// Request body values should be in the response.
+	assert.Equal(t, "Buddy", created["name"], "create response should contain request body name")
+	assert.Equal(t, "dog", created["tag"], "create response should contain request body tag")
+
+	// Generated id should still be present.
+	require.Contains(t, created, "id", "create response should have generated id")
+
+	// GET /pets/{petId} should return the merged values.
+	petID := coerceID(t, created["id"])
+
+	fetchResp := doRequest(t, srv, http.MethodGet, "/pets/"+petID)
+	defer closeBody(t, fetchResp)
+
+	assert.Equal(t, http.StatusOK, fetchResp.StatusCode)
+
+	var fetched map[string]any
+	decodeJSON(t, fetchResp, &fetched)
+
+	assert.Equal(t, "Buddy", fetched["name"], "fetched name should match POSTed name")
+	assert.Equal(t, "dog", fetched["tag"], "fetched tag should match POSTed tag")
+	assert.Equal(t, created["id"], fetched["id"], "fetched id should match created id")
+}
+
+func TestStatefulE2E_CreatePreservesGeneratedID(t *testing.T) {
+	skipIfShort(t)
+
+	srv := buildStatefulServer(t, "petstore-3.1.yaml", 0)
+	defer srv.Close()
+
+	// POST with only name — id should be generated.
+	createResp := doJSONRequest(t, srv, http.MethodPost, "/pets", `{"name": "Luna"}`)
+	defer closeBody(t, createResp)
+
+	assert.Equal(t, http.StatusCreated, createResp.StatusCode)
+
+	var created map[string]any
+	decodeJSON(t, createResp, &created)
+
+	require.Contains(t, created, "id", "response must have generated id")
+	assert.Equal(t, "Luna", created["name"], "response must have request body name")
+
+	// Fetch and verify id + name survive round-trip.
+	petID := coerceID(t, created["id"])
+
+	fetchResp := doRequest(t, srv, http.MethodGet, "/pets/"+petID)
+	defer closeBody(t, fetchResp)
+
+	assert.Equal(t, http.StatusOK, fetchResp.StatusCode)
+
+	var fetched map[string]any
+	decodeJSON(t, fetchResp, &fetched)
+
+	assert.Equal(t, created["id"], fetched["id"])
+	assert.Equal(t, "Luna", fetched["name"])
+}
+
+func TestStatefulE2E_CreateMultipleUniqueIDs(t *testing.T) {
+	skipIfShort(t)
+
+	srv := buildStatefulServer(t, "petstore-3.1.yaml", 0)
+	defer srv.Close()
+
+	// Create two pets with different names.
+	resp1 := doJSONRequest(t, srv, http.MethodPost, "/pets", `{"name": "Alpha"}`)
+	defer closeBody(t, resp1)
+
+	require.Equal(t, http.StatusCreated, resp1.StatusCode)
+
+	var pet1 map[string]any
+	decodeJSON(t, resp1, &pet1)
+
+	resp2 := doJSONRequest(t, srv, http.MethodPost, "/pets", `{"name": "Beta"}`)
+	defer closeBody(t, resp2)
+
+	require.Equal(t, http.StatusCreated, resp2.StatusCode)
+
+	var pet2 map[string]any
+	decodeJSON(t, resp2, &pet2)
+
+	// IDs must differ.
+	require.Contains(t, pet1, "id")
+	require.Contains(t, pet2, "id")
+	assert.NotEqual(t, pet1["id"], pet2["id"], "two creates should produce unique IDs")
+
+	// Names should be the request body values.
+	assert.Equal(t, "Alpha", pet1["name"])
+	assert.Equal(t, "Beta", pet2["name"])
+
+	// List should contain both.
+	listResp := doRequest(t, srv, http.MethodGet, "/pets")
+	defer closeBody(t, listResp)
+
+	var items []any
+	decodeJSON(t, listResp, &items)
+	assert.Len(t, items, 2, "list should contain both created pets")
+}
+
 // --- Test Helpers (stateful-specific) ---
 
 // coerceID converts a JSON value (float64 for numbers, string) to a URL-safe string.

@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.8] - 2026-04-17
+
+### Fixed
+
+#### Stateful Create Merges Request Body into Response
+- `POST` in stateful mode now merges request body fields into the generated response — POSTing `{"name": "Buddy"}` returns `"name": "Buddy"` instead of a faker-generated name
+- Three-layer merge pipeline: faker base → spec example overlay (ID-protected) → request body (user intent wins)
+- When the spec provides media-type examples, example values replace faker defaults for more realistic responses
+- ID fields are protected from example overwrite to keep IDs unique across creates
+- Seeding skill updated: agents now send desired values directly in POST, no more POST→PATCH workaround
+
 ## [0.3.7] - 2026-04-17
 
 ### Fixed

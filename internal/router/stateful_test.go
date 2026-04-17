@@ -848,6 +848,460 @@ func TestHandleStatefulMode_DegradedFetch_StillWorks(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code, "fetch uses stored data — not affected by schema degradation")
 }
 
+// --- buildIDFieldSet tests ---
+
+func TestBuildIDFieldSet_FlatPath(t *testing.T) {
+	entry := model.BehaviorEntry{
+		PathPattern: "/pets/{petId}",
+		Type:        model.BehaviorCreate,
+	}
+
+	set := buildIDFieldSet(entry)
+
+	// "id" is always present (strategy 4 universal fallback).
+	assert.True(t, set["id"], "should always include 'id'")
+	// "petId" from lastPathParam (strategy 1).
+	assert.True(t, set["petid"], "should include lowercased lastPathParam")
+}
+
+func TestBuildIDFieldSet_CollectionPath_NoLastParam(t *testing.T) {
+	// POST /pets has no path param — only "id" + IDFieldHint.
+	entry := model.BehaviorEntry{
+		PathPattern: "/pets",
+		Type:        model.BehaviorCreate,
+		IDFieldHint: "gid",
+	}
+
+	set := buildIDFieldSet(entry)
+
+	assert.True(t, set["id"], "should always include 'id'")
+	assert.True(t, set["gid"], "should include IDFieldHint")
+	assert.Len(t, set, 2)
+}
+
+func TestBuildIDFieldSet_NestedPath(t *testing.T) {
+	entry := model.BehaviorEntry{
+		PathPattern: "/projects/{project_gid}/tasks/{task_gid}",
+		Type:        model.BehaviorCreate,
+		IDFieldHint: "gid",
+	}
+
+	set := buildIDFieldSet(entry)
+
+	assert.True(t, set["id"])
+	assert.True(t, set["task_gid"], "should include lowercased lastPathParam")
+	assert.True(t, set["gid"], "should include stripped remainder and IDFieldHint")
+}
+
+func TestBuildIDFieldSet_AlwaysIncludesID(t *testing.T) {
+	entry := model.BehaviorEntry{
+		PathPattern: "/items",
+		Type:        model.BehaviorCreate,
+	}
+
+	set := buildIDFieldSet(entry)
+	assert.True(t, set["id"], "should always include 'id' even with no params")
+}
+
+// --- shallowMergeExcluding tests ---
+
+func TestShallowMergeExcluding_Basic(t *testing.T) {
+	base := map[string]any{"id": float64(42), "name": "Faker", "status": "active"}
+	overlay := map[string]any{"id": float64(1), "name": "Example", "color": "blue"}
+	exclude := map[string]bool{"id": true}
+
+	result := shallowMergeExcluding(base, overlay, exclude)
+
+	// "id" should be preserved from base (protected).
+	assert.InDelta(t, float64(42), result["id"], 0, "id should be protected from overlay")
+	// "name" should come from overlay (not protected).
+	assert.Equal(t, "Example", result["name"])
+	// "color" should be added from overlay.
+	assert.Equal(t, "blue", result["color"])
+	// "status" preserved from base.
+	assert.Equal(t, "active", result["status"])
+}
+
+func TestShallowMergeExcluding_CaseInsensitive(t *testing.T) {
+	base := map[string]any{"ID": float64(42), "name": "Faker"}
+	overlay := map[string]any{"ID": float64(1), "name": "Example"}
+	exclude := map[string]bool{"id": true} // lowercase in set
+
+	result := shallowMergeExcluding(base, overlay, exclude)
+
+	assert.InDelta(t, float64(42), result["ID"], 0, "case-insensitive protection")
+	assert.Equal(t, "Example", result["name"])
+}
+
+func TestShallowMergeExcluding_EmptyExclude(t *testing.T) {
+	base := map[string]any{"id": float64(42)}
+	overlay := map[string]any{"id": float64(1), "name": "Example"}
+
+	result := shallowMergeExcluding(base, overlay, map[string]bool{})
+
+	// With empty exclude set, behaves like normal shallowMerge.
+	assert.InDelta(t, float64(1), result["id"], 0)
+	assert.Equal(t, "Example", result["name"])
+}
+
+func TestShallowMergeExcluding_EmptyOverlay(t *testing.T) {
+	base := map[string]any{"id": float64(42), "name": "Faker"}
+
+	result := shallowMergeExcluding(base, map[string]any{}, map[string]bool{"id": true})
+
+	assert.InDelta(t, float64(42), result["id"], 0)
+	assert.Equal(t, "Faker", result["name"])
+}
+
+func TestShallowMergeExcluding_CloneSafety(t *testing.T) {
+	base := map[string]any{"id": float64(42), "name": "Faker"}
+	overlay := map[string]any{"name": "Example"}
+
+	result := shallowMergeExcluding(base, overlay, map[string]bool{"id": true})
+
+	// Mutating the result should not affect the original.
+	result["extra"] = "added"
+	_, hasExtra := base["extra"]
+	assert.False(t, hasExtra, "base map should not be mutated")
+}
+
+func TestShallowMergeExcluding_MultipleExcludedFields(t *testing.T) {
+	base := map[string]any{"id": float64(42), "gid": "abc", "name": "Faker"}
+	overlay := map[string]any{"id": float64(1), "gid": "example-gid", "name": "Example"}
+	exclude := map[string]bool{"id": true, "gid": true}
+
+	result := shallowMergeExcluding(base, overlay, exclude)
+
+	assert.InDelta(t, float64(42), result["id"], 0, "id protected")
+	assert.Equal(t, "abc", result["gid"], "gid protected")
+	assert.Equal(t, "Example", result["name"], "name not protected")
+}
+
+// --- handleCreate merge behavior tests ---
+
+func TestHandleCreate_MergesRequestBody(t *testing.T) {
+	store := state.NewInMemory(100)
+	h := newStatefulTestHandler(store)
+	gen := newStatefulGen()
+	entry := createEntry()
+
+	body := `{"name":"Buddy","tag":"dog"}`
+	req := httptest.NewRequest(http.MethodPost, "/pets", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+
+	handled := h.handleStatefulMode(rec, req, entry, gen, []byte(body))
+
+	require.True(t, handled)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+
+	// Request body values should override generated values.
+	assert.Equal(t, "Buddy", resp["name"], "request body name should override generated")
+	assert.Equal(t, "dog", resp["tag"], "request body tag should override generated")
+	// Generated id should still be present.
+	assert.Contains(t, resp, "id", "generated id should be present")
+}
+
+func TestHandleCreate_EmptyBody(t *testing.T) {
+	store := state.NewInMemory(100)
+	h := newStatefulTestHandler(store)
+	gen := newStatefulGen()
+	entry := createEntry()
+
+	req := httptest.NewRequest(http.MethodPost, "/pets", nil)
+	rec := httptest.NewRecorder()
+
+	handled := h.handleStatefulMode(rec, req, entry, gen, []byte{})
+
+	require.True(t, handled)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+
+	// Should be fully generated — no merge, no error.
+	assert.Contains(t, resp, "id")
+	assert.Contains(t, resp, "name")
+}
+
+func TestHandleCreate_WithExample_IDProtected(t *testing.T) {
+	store := state.NewInMemory(100)
+	h := newStatefulTestHandler(store)
+	gen := newStatefulGen()
+
+	entry := createEntry()
+	entry.ResponseExamples = map[int]any{
+		http.StatusCreated: map[string]any{
+			"id":   float64(1),
+			"name": "Example Pet",
+			"tag":  "example-tag",
+		},
+	}
+
+	body := `{"name":"Buddy"}`
+	req := httptest.NewRequest(http.MethodPost, "/pets", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+
+	handled := h.handleStatefulMode(rec, req, entry, gen, []byte(body))
+
+	require.True(t, handled)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+
+	// Request body wins over example.
+	assert.Equal(t, "Buddy", resp["name"], "request body should override example")
+	// Example's "tag" should be used (not in request body, better than faker).
+	assert.Equal(t, "example-tag", resp["tag"], "example tag should override faker")
+	// ID should NOT be from example (protected) — should be faker-generated.
+	assert.NotEqual(t, float64(1), resp["id"], "example id should be protected; faker id used")
+	assert.Contains(t, resp, "id")
+}
+
+func TestHandleCreate_ExampleOnly_NoRequestBody(t *testing.T) {
+	store := state.NewInMemory(100)
+	h := newStatefulTestHandler(store)
+	gen := newStatefulGen()
+
+	entry := createEntry()
+	entry.ResponseExamples = map[int]any{
+		http.StatusCreated: map[string]any{
+			"id":   float64(1),
+			"name": "Example Pet",
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/pets", nil)
+	rec := httptest.NewRecorder()
+
+	handled := h.handleStatefulMode(rec, req, entry, gen, []byte{})
+
+	require.True(t, handled)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+
+	// Example name should override faker name.
+	assert.Equal(t, "Example Pet", resp["name"], "example name should override faker")
+	// ID should NOT be from example.
+	assert.NotEqual(t, float64(1), resp["id"], "example id should be protected")
+	assert.Contains(t, resp, "id")
+}
+
+func TestHandleCreate_MultipleCreates_UniqueIDs(t *testing.T) {
+	store := state.NewInMemory(100)
+	h := newStatefulTestHandler(store)
+	gen := newStatefulGen()
+
+	entry := createEntry()
+	entry.ResponseExamples = map[int]any{
+		http.StatusCreated: map[string]any{
+			"id":   float64(1),
+			"name": "Example Pet",
+		},
+	}
+
+	// First create.
+	body1 := `{"name":"First"}`
+	req1 := httptest.NewRequest(http.MethodPost, "/pets", strings.NewReader(body1))
+	req1.Header.Set("Content-Type", "application/json")
+
+	rec1 := httptest.NewRecorder()
+
+	h.handleStatefulMode(rec1, req1, entry, gen, []byte(body1))
+
+	var resp1 map[string]any
+	require.NoError(t, json.Unmarshal(rec1.Body.Bytes(), &resp1))
+
+	// Second create with different body.
+	body2 := `{"name":"Second"}`
+	req2 := httptest.NewRequest(http.MethodPost, "/pets", strings.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
+
+	rec2 := httptest.NewRecorder()
+
+	h.handleStatefulMode(rec2, req2, entry, gen, []byte(body2))
+
+	var resp2 map[string]any
+	require.NoError(t, json.Unmarshal(rec2.Body.Bytes(), &resp2))
+
+	// Both should have IDs, and they should differ.
+	require.Contains(t, resp1, "id")
+	require.Contains(t, resp2, "id")
+	assert.NotEqual(t, resp1["id"], resp2["id"],
+		"two creates with same example should produce unique IDs")
+
+	// Store should have 2 resources.
+	assert.Equal(t, 2, store.Count(), "store should have 2 resources")
+}
+
+func TestHandleCreate_WrappedResource_MergesAllLayers(t *testing.T) {
+	store := state.NewInMemory(100)
+	h := newStatefulTestHandler(store)
+	gen := newStatefulGen()
+
+	// Wrapped entry (Asana-style): response wrapped in {"data": {...}}.
+	entry := model.BehaviorEntry{
+		Method:      http.MethodPost,
+		PathPattern: "/projects",
+		Type:        model.BehaviorCreate,
+		SuccessCode: http.StatusCreated,
+		WrapperKey:  "data",
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusCreated: {Name: "Project", Schema: petObjectSchema()},
+		},
+		ResponseExamples: map[int]any{
+			http.StatusCreated: map[string]any{
+				"data": map[string]any{
+					"id":    float64(99),
+					"name":  "Example Project",
+					"color": "blue",
+				},
+			},
+		},
+		Source:     model.SourceHeuristic,
+		Confidence: 0.9,
+	}
+
+	body := `{"data":{"name":"My Project"}}`
+	req := httptest.NewRequest(http.MethodPost, "/projects", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+
+	handled := h.handleStatefulMode(rec, req, entry, gen, []byte(body))
+
+	require.True(t, handled)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+
+	// Response should be wrapped.
+	data, ok := resp["data"].(map[string]any)
+	require.True(t, ok, "response should have 'data' wrapper")
+
+	// Request body wins for name.
+	assert.Equal(t, "My Project", data["name"], "request body overrides example")
+	// Example provides color (not in request body, not in faker schema).
+	assert.Equal(t, "blue", data["color"], "example color should override faker")
+	// ID should NOT be from example (protected).
+	assert.NotEqual(t, float64(99), data["id"], "example id should be protected")
+	assert.Contains(t, data, "id")
+}
+
+// --- degraded create + example merge tests ---
+
+func TestHandleCreate_DegradedWithExample_MergesRequestBody(t *testing.T) {
+	// Degraded path: schema is nil but example exists.
+	// Example provides the base (including ID — not protected when degraded).
+	// Request body overrides example fields.
+	store := state.NewInMemory(100)
+	h := newStatefulTestHandler(store)
+	gen := newStatefulGen()
+
+	exampleData := map[string]any{
+		"id":     float64(42),
+		"name":   "Example Name",
+		"status": "active",
+	}
+
+	entry := model.BehaviorEntry{
+		Method:      http.MethodPost,
+		PathPattern: "/items",
+		Type:        model.BehaviorCreate,
+		SuccessCode: http.StatusCreated,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusCreated: nil, // degraded — no compiled schema
+		},
+		ResponseExamples: map[int]any{
+			http.StatusCreated: exampleData,
+		},
+		Source:                 model.SourceHeuristic,
+		Confidence:             0.9,
+		DegradedResponseSchema: "compiler: schema compilation failed",
+	}
+
+	body := `{"name":"Custom Name"}`
+	req := httptest.NewRequest(http.MethodPost, "/items", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+
+	handled := h.handleStatefulMode(rec, req, entry, gen, []byte(body))
+
+	require.True(t, handled)
+	// Should NOT be 500 — example provides a fallback.
+	assert.Equal(t, http.StatusCreated, rec.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+
+	// Example ID is NOT protected when degraded — a static ID is better than none.
+	assert.InDelta(t, float64(42), resp["id"], 0,
+		"degraded path should include example ID (not protected)")
+	// Request body overrides example.
+	assert.Equal(t, "Custom Name", resp["name"],
+		"request body should override example name")
+	// Example field not in request body should be present.
+	assert.Equal(t, "active", resp["status"],
+		"example status should be present")
+
+	// Resource should be stored and fetchable.
+	assert.Equal(t, 1, store.Count(), "store should have 1 resource")
+}
+
+func TestHandleCreate_DegradedWithExample_NoRequestBody(t *testing.T) {
+	// Degraded path with example but no request body.
+	// Should use example values directly (no ID protection).
+	store := state.NewInMemory(100)
+	h := newStatefulTestHandler(store)
+	gen := newStatefulGen()
+
+	exampleData := map[string]any{
+		"id":   float64(99),
+		"name": "Example Only",
+	}
+
+	entry := model.BehaviorEntry{
+		Method:      http.MethodPost,
+		PathPattern: "/items",
+		Type:        model.BehaviorCreate,
+		SuccessCode: http.StatusCreated,
+		ResponseSchemas: map[int]*model.CompiledSchema{
+			http.StatusCreated: nil,
+		},
+		ResponseExamples: map[int]any{
+			http.StatusCreated: exampleData,
+		},
+		Source:                 model.SourceHeuristic,
+		Confidence:             0.9,
+		DegradedResponseSchema: "compiler: schema compilation failed",
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/items", nil)
+	rec := httptest.NewRecorder()
+
+	handled := h.handleStatefulMode(rec, req, entry, gen, []byte{})
+
+	require.True(t, handled)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+
+	assert.InDelta(t, float64(99), resp["id"], 0, "example ID should be present")
+	assert.Equal(t, "Example Only", resp["name"], "example name should be present")
+}
+
 // --- extractPathParams tests ---
 
 func TestExtractPathParams(t *testing.T) {
