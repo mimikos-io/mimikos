@@ -868,3 +868,302 @@ components:
 	require.True(t, ok)
 	assert.Equal(t, int64(1), m["id"])
 }
+
+// --- Response-Level $ref Pointer Construction ---
+
+func TestParse_ResponseRefPointer(t *testing.T) {
+	p := newParser()
+
+	// Spec uses $ref at the response level (not the schema level).
+	// The parser must use the component response path as the pointer base,
+	// not the inline path under the operation.
+	doc := newDocument(t, []byte(`openapi: "3.0.0"
+info:
+  title: Response Ref Test
+  version: "1.0"
+paths:
+  /items/{id}:
+    get:
+      operationId: getItem
+      responses:
+        "200":
+          description: An item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Item"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+components:
+  schemas:
+    Item:
+      type: object
+      properties:
+        id:
+          type: integer
+    ErrorObject:
+      type: object
+      properties:
+        message:
+          type: string
+  responses:
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                $ref: "#/components/schemas/ErrorObject"
+    TooManyRequests:
+      description: Too many requests
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                $ref: "#/components/schemas/ErrorObject"`))
+
+	spec, err := p.Parse(context.Background(), doc)
+	require.NoError(t, err)
+	require.Len(t, spec.Operations, 1)
+
+	op := spec.Operations[0]
+
+	// 200 response uses a schema-level $ref — pointer should be the schema component ref.
+	require.Contains(t, op.Responses, 200)
+	resp200 := op.Responses[200]
+	require.NotNil(t, resp200.Schema)
+	assert.Equal(t, "#/components/schemas/Item", resp200.Schema.Pointer,
+		"200 schema-level $ref should use schema component pointer")
+
+	// 403 response is a response-level $ref. The schema inside Forbidden is inline,
+	// so the pointer must be relative to the component response, not the path.
+	require.Contains(t, op.Responses, 403)
+	resp403 := op.Responses[403]
+	require.NotNil(t, resp403.Schema)
+	assert.Equal(t, "#/components/responses/Forbidden/content/application~1json/schema",
+		resp403.Schema.Pointer,
+		"403 response-level $ref should produce component-based pointer")
+
+	// 429 response is also a response-level $ref.
+	require.Contains(t, op.Responses, 429)
+	resp429 := op.Responses[429]
+	require.NotNil(t, resp429.Schema)
+	assert.Equal(t, "#/components/responses/TooManyRequests/content/application~1json/schema",
+		resp429.Schema.Pointer,
+		"429 response-level $ref should produce component-based pointer")
+}
+
+func TestParse_ResponseRefAndInlineMixed(t *testing.T) {
+	p := newParser()
+
+	// Mix of inline responses and $ref responses in the same operation.
+	// Inline responses get path-based pointers. $ref responses get component-based pointers.
+	doc := newDocument(t, []byte(`openapi: "3.0.0"
+info:
+  title: Mixed Response Test
+  version: "1.0"
+paths:
+  /items:
+    get:
+      operationId: listItems
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      operationId: createItem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+        "403":
+          $ref: "#/components/responses/Forbidden"
+components:
+  responses:
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              code:
+                type: integer`))
+
+	spec, err := p.Parse(context.Background(), doc)
+	require.NoError(t, err)
+	require.Len(t, spec.Operations, 2)
+
+	t.Run("GET_inline_200", func(t *testing.T) {
+		op := spec.Operations[0]
+		resp200 := op.Responses[200]
+		require.NotNil(t, resp200.Schema)
+		assert.Equal(t, "#/paths/~1items/get/responses/200/content/application~1json/schema",
+			resp200.Schema.Pointer,
+			"inline 200 should use path-based pointer")
+	})
+
+	t.Run("GET_ref_403", func(t *testing.T) {
+		op := spec.Operations[0]
+		resp403 := op.Responses[403]
+		require.NotNil(t, resp403.Schema)
+		assert.Equal(t, "#/components/responses/Forbidden/content/application~1json/schema",
+			resp403.Schema.Pointer,
+			"$ref 403 should use component-based pointer")
+	})
+
+	t.Run("POST_inline_201", func(t *testing.T) {
+		op := spec.Operations[1]
+		resp201 := op.Responses[201]
+		require.NotNil(t, resp201.Schema)
+		assert.Equal(t, "#/paths/~1items/post/responses/201/content/application~1json/schema",
+			resp201.Schema.Pointer,
+			"inline 201 should use path-based pointer")
+	})
+
+	t.Run("POST_ref_403", func(t *testing.T) {
+		op := spec.Operations[1]
+		resp403 := op.Responses[403]
+		require.NotNil(t, resp403.Schema)
+		assert.Equal(t, "#/components/responses/Forbidden/content/application~1json/schema",
+			resp403.Schema.Pointer,
+			"$ref 403 in POST should use same component-based pointer")
+	})
+}
+
+func TestParse_RequestBodyRefPointer(t *testing.T) {
+	p := newParser()
+
+	// Request body uses $ref at the request body level.
+	// The parser must use the component request body path as the pointer base.
+	doc := newDocument(t, []byte(`openapi: "3.0.0"
+info:
+  title: RequestBody Ref Test
+  version: "1.0"
+paths:
+  /items:
+    post:
+      operationId: createItem
+      requestBody:
+        $ref: "#/components/requestBodies/ItemCreate"
+      responses:
+        "201":
+          description: Created
+  /items/{id}:
+    put:
+      operationId: updateItem
+      requestBody:
+        $ref: "#/components/requestBodies/ItemCreate"
+      responses:
+        "200":
+          description: Updated
+components:
+  requestBodies:
+    ItemCreate:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              name:
+                type: string`))
+
+	spec, err := p.Parse(context.Background(), doc)
+	require.NoError(t, err)
+	require.Len(t, spec.Operations, 2)
+
+	t.Run("POST_ref_requestBody", func(t *testing.T) {
+		op := spec.Operations[0]
+		require.NotNil(t, op.RequestBody)
+		require.NotNil(t, op.RequestBody.Schema)
+		assert.Equal(t, "#/components/requestBodies/ItemCreate/content/application~1json/schema",
+			op.RequestBody.Schema.Pointer,
+			"$ref request body should produce component-based pointer")
+		assert.True(t, op.RequestBody.Required, "required flag should be preserved from component")
+	})
+
+	t.Run("PUT_ref_requestBody", func(t *testing.T) {
+		op := spec.Operations[1]
+		require.NotNil(t, op.RequestBody)
+		require.NotNil(t, op.RequestBody.Schema)
+		assert.Equal(t, "#/components/requestBodies/ItemCreate/content/application~1json/schema",
+			op.RequestBody.Schema.Pointer,
+			"$ref request body reused in PUT should produce same component-based pointer")
+	})
+}
+
+func TestParse_DefaultResponseRefPointer(t *testing.T) {
+	p := newParser()
+
+	// Default response uses $ref.
+	doc := newDocument(t, []byte(`openapi: "3.0.0"
+info:
+  title: Default Response Ref Test
+  version: "1.0"
+paths:
+  /items:
+    get:
+      operationId: listItems
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+        default:
+          $ref: "#/components/responses/DefaultError"
+components:
+  responses:
+    DefaultError:
+      description: Default error
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message:
+                type: string`))
+
+	spec, err := p.Parse(context.Background(), doc)
+	require.NoError(t, err)
+	require.Len(t, spec.Operations, 1)
+
+	op := spec.Operations[0]
+	require.NotNil(t, op.DefaultResponse)
+	require.NotNil(t, op.DefaultResponse.Schema)
+	assert.Equal(t, "#/components/responses/DefaultError/content/application~1json/schema",
+		op.DefaultResponse.Schema.Pointer,
+		"default response $ref should produce component-based pointer")
+}
