@@ -62,6 +62,7 @@ func New(specBytes []byte, version string) (*SchemaCompiler, error) {
 	// Create jsonschema compiler and register the spec document.
 	c := jsonschema.NewCompiler()
 	c.DefaultDraft(jsonschema.Draft2020)
+	c.AssertFormat()
 
 	if err := c.AddResource(baseURL, doc); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidSpec, err)
