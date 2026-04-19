@@ -5,6 +5,9 @@ Both use the same Bookstore API spec. Example 1 shows the floor (spec only).
 Example 2 shows how source code context produces richer results using the same
 starting spec.
 
+**Note:** These examples show the intended output format and enhancement logic.
+Actual results may vary depending on the AI model executing the skill.
+
 ---
 
 ## Example 1: Bookstore API — Spec Only

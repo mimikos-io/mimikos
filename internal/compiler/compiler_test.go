@@ -1127,3 +1127,142 @@ components:
 	invalid := unmarshalJSON(t, `{}`)
 	require.Error(t, compiled.Validate(invalid))
 }
+
+// --- Format Assertion ---
+
+func TestCompile_FormatAssertion(t *testing.T) {
+	// This test verifies that the compiler enables format assertion so that
+	// schema.Format is populated on compiled schemas. Without AssertFormat(),
+	// schema.Format is always nil in Draft 2020-12 (the default).
+	specBytes := []byte(`openapi: "3.1.0"
+info:
+  title: Format Assertion Test
+  version: "1.0"
+paths:
+  /events:
+    get:
+      operationId: listEvents
+      responses:
+        "200":
+          description: Events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Event"
+components:
+  schemas:
+    Event:
+      type: object
+      properties:
+        name:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        date:
+          type: string
+          format: date
+        contact:
+          type: string
+          format: email
+        event_id:
+          type: string
+          format: uuid
+        website:
+          type: string
+          format: uri
+        host:
+          type: string
+          format: hostname
+        server_ip:
+          type: string
+          format: ipv4
+        server_ipv6:
+          type: string
+          format: ipv6`)
+
+	spec := parseInlineSpec(t, specBytes)
+
+	sc, err := New(specBytes, spec.Version)
+	require.NoError(t, err)
+
+	eventRef := spec.Operations[0].Responses[200].Schema
+	compiled, err := sc.Compile(eventRef.Pointer, eventRef.Name, eventRef.IsCircular)
+	require.NoError(t, err)
+
+	// Every format-annotated property must have a non-nil Format field.
+	formatFields := map[string]string{
+		"started_at":  "date-time",
+		"date":        "date",
+		"contact":     "email",
+		"event_id":    "uuid",
+		"website":     "uri",
+		"host":        "hostname",
+		"server_ip":   "ipv4",
+		"server_ipv6": "ipv6",
+	}
+
+	for field, expectedFormat := range formatFields {
+		prop := compiled.Schema.Properties[field]
+		require.NotNil(t, prop, "property %q should exist", field)
+		require.NotNil(t, prop.Format, "property %q should have Format populated (was nil before AssertFormat fix)", field)
+		assert.Equal(t, expectedFormat, prop.Format.Name, "property %q format name", field)
+	}
+
+	// "name" has no format — should remain nil.
+	nameProp := compiled.Schema.Properties["name"]
+	require.NotNil(t, nameProp)
+	assert.Nil(t, nameProp.Format, "property without format annotation should have nil Format")
+}
+
+func TestCompile_FormatValidation(t *testing.T) {
+	// With AssertFormat(), the validator also enforces format constraints.
+	// Verify that invalid format values are rejected.
+	specBytes := []byte(`openapi: "3.1.0"
+info:
+  title: Format Validation Test
+  version: "1.0"
+paths:
+  /events:
+    get:
+      operationId: listEvents
+      responses:
+        "200":
+          description: Events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Event"
+components:
+  schemas:
+    Event:
+      type: object
+      properties:
+        started_at:
+          type: string
+          format: date-time
+        contact:
+          type: string
+          format: email`)
+
+	spec := parseInlineSpec(t, specBytes)
+
+	sc, err := New(specBytes, spec.Version)
+	require.NoError(t, err)
+
+	eventRef := spec.Operations[0].Responses[200].Schema
+	compiled, err := sc.Compile(eventRef.Pointer, eventRef.Name, eventRef.IsCircular)
+	require.NoError(t, err)
+
+	// Valid format values should pass.
+	valid := unmarshalJSON(t, `{"started_at": "2024-08-15T14:30:00Z", "contact": "user@example.com"}`)
+	require.NoError(t, compiled.Validate(valid))
+
+	// Invalid date-time format should fail.
+	badDateTime := unmarshalJSON(t, `{"started_at": "not-a-date"}`)
+	require.Error(t, compiled.Validate(badDateTime), "invalid date-time should be rejected with AssertFormat")
+
+	// Invalid email format should fail.
+	badEmail := unmarshalJSON(t, `{"contact": "not-an-email"}`)
+	require.Error(t, compiled.Validate(badEmail), "invalid email should be rejected with AssertFormat")
+}

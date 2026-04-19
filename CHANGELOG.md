@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.9] - 2026-04-19
+
+### Fixed
+
+#### Format-Annotated Fields Now Generate Realistic Values
+- Fields with `format: date-time`, `format: email`, `format: uuid`, and all other JSON Schema format annotations now produce format-appropriate values instead of random strings
+- Root cause: the jsonschema compiler's format assertion was not enabled — in Draft 2020-12 (the default), `schema.Format` is only populated when `AssertFormat()` is called, so all format information was silently discarded at compile time
+- Affects every format handled by the generator: `date-time`, `date`, `email`, `uuid`, `uri`, `hostname`, `ipv4`, `ipv6`
+- Fields caught by the semantic mapper (e.g., a field named `email`) were unaffected — the bug only surfaced on fields where the name didn't match a semantic entry (e.g., `placed_at` with `format: date-time`)
+- Response validation now also enforces format constraints on generated output — this is a positive side effect that catches generator bugs earlier (strict mode returns 500, default mode logs a warning)
+
 ## [0.3.8] - 2026-04-17
 
 ### Fixed

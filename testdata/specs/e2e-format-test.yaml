@@ -1,0 +1,83 @@
+openapi: "3.1.0"
+info:
+  title: Format Assertion Test
+  version: "1.0.0"
+  description: >
+    Test spec for verifying that format-annotated string fields produce
+    format-appropriate values (not random strings). Field names are chosen
+    to NOT match semantic mapper entries, so the format annotation is the
+    only signal for realistic generation.
+paths:
+  /events:
+    get:
+      operationId: listEvents
+      summary: List all events
+      responses:
+        "200":
+          description: A list of events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Event"
+  /events/{eventId}:
+    get:
+      operationId: getEvent
+      summary: Get an event by ID
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: A single event
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Event"
+components:
+  schemas:
+    Event:
+      type: object
+      required:
+        - id
+        - title
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        placed_at:
+          type: string
+          format: date-time
+          description: When the event was placed (field name avoids semantic mapper)
+        scheduled_for:
+          type: string
+          format: date
+          description: Scheduled date (field name avoids semantic mapper)
+        correlation_id:
+          type: string
+          format: uuid
+          description: Correlation identifier (field name avoids semantic mapper)
+        notify_endpoint:
+          type: string
+          format: uri
+          description: Notification endpoint (field name avoids semantic mapper)
+        origin:
+          type: string
+          format: hostname
+          description: Origin hostname (field name avoids semantic mapper)
+        gateway:
+          type: string
+          format: ipv4
+          description: Gateway address (field name avoids semantic mapper)
+        contact:
+          type: string
+          format: email
+          description: Contact address (field name avoids semantic mapper)
+        tag:
+          type: string
+          description: No format — should use faker (control field)
