@@ -54,19 +54,19 @@ Before analyzing gaps, ask the human about their environment:
 > A few questions:
 >
 > 1. **Is this spec part of its API project?** (i.e., is the source code for this API
->    in the same repo?) If yes, where are the tests and any fixture/seed data?
+     > in the same repo?) If yes, where are the tests and any fixture/seed data?
 > 2. **Do you have sample API responses** (from a running instance, Postman collection,
->    or saved files) I can reference?
+     > or saved files) I can reference?
 >
 > If you'd rather skip this and let me work from the spec alone, just say so — I'll
 > proceed with what the spec provides.
 
 **Three possible outcomes:**
 
-| Human says                         | Your action                                        |
-|------------------------------------|----------------------------------------------------|
+| Human says                         | Your action                                         |
+|------------------------------------|-----------------------------------------------------|
 | Points to source code / test paths | Search those paths for fixtures and values (step 3) |
-| Provides sample responses / URL    | Read those files or make GET requests (step 4)     |
+| Provides sample responses / URL    | Read those files or make GET requests (step 4)      |
 | "Just use the spec" / no answer    | Fall back to auto-detection (step 2b), then proceed |
 
 **Step 2b: Auto-detection fallback (only if the human doesn't respond)**
@@ -169,15 +169,15 @@ standards-backed. No structural changes, no data model decisions, no hallucinate
    Domain-accurate because they come from the project, not AI invention.
 2. **Format-implied defaults** — standard placeholder values for known formats:
 
-| Format      | Default example                  |
-|-------------|----------------------------------|
-| `email`     | `"user@example.com"`             |
-| `uri`       | `"https://example.com/resource"` |
-| `date-time` | `"2024-01-15T09:30:00Z"`        |
-| `date`      | `"2024-01-15"`                   |
+| Format      | Default example                          |
+|-------------|------------------------------------------|
+| `email`     | `"user@example.com"`                     |
+| `uri`       | `"https://example.com/resource"`         |
+| `date-time` | `"2024-01-15T09:30:00Z"`                 |
+| `date`      | `"2024-01-15"`                           |
 | `uuid`      | `"550e8400-e29b-41d4-a716-446655440000"` |
-| `ipv4`      | `"192.0.2.1"`                    |
-| `hostname`  | `"api.example.com"`              |
+| `ipv4`      | `"192.0.2.1"`                            |
+| `hostname`  | `"api.example.com"`                      |
 
 Fields with domain-specific meaning, no format/enum, and no context source are
 **never** given examples. Skip them.
@@ -185,7 +185,8 @@ Fields with domain-specific meaning, no format/enum, and no context source are
 **Media-type examples** on 200/201 responses that have a schema but zero examples.
 Assemble from: existing property examples, context-sourced values, enum first-values,
 format defaults. Fields with no source are omitted — partial examples are better than
-hallucinated ones.
+hallucinated ones. Omit properties with `writeOnly: true` from response examples — these
+fields (e.g., `password`) appear in requests but never in responses.
 
 **OAS reference:** The `example` field on Schema Object provides a free-form property
 value sample. The `example`/`examples` field on Media Type Object provides a complete
@@ -195,17 +196,19 @@ Ref: https://spec.openapis.org/oas/v3.0.3#media-type-object
 
 ### B. Error Responses
 
-| Enhancement                                       | Condition                                                   |
-|---------------------------------------------------|-------------------------------------------------------------|
-| Add `404` response on fetch/update/delete         | GET/PATCH/PUT/DELETE on `/{param}` path, no 404 defined     |
-| Add `400` or `422` response on create/update      | POST/PATCH/PUT with requestBody, no 4xx error response      |
-| Create shared `ErrorResponse` schema              | Spec has no error schema in components and needs errors     |
-| Create shared responses in `components/responses` | 2+ endpoints would use the same error pattern               |
+| Enhancement                                       | Condition                                               |
+|---------------------------------------------------|---------------------------------------------------------|
+| Add `404` response on fetch/update/delete         | GET/PATCH/PUT/DELETE on `/{param}` path, no 404 defined |
+| Add `400` or `422` response on create/update      | POST/PATCH/PUT with requestBody, no 4xx error response  |
+| Create shared `ErrorResponse` schema              | Spec has no error schema in components and needs errors |
+| Create shared responses in `components/responses` | 2+ endpoints would use the same error pattern           |
 
 **Boundaries:**
 
-- Error schema uses a minimal pattern: `{code: integer, message: string}`. No opinionated
-  RFC 7807 structure.
+- Error schema uses a minimal pattern: `{code: integer, message: string}`. This is the
+  simplest reasonable structure — not RFC 7807, not JSON:API, not any opinionated format.
+  Creating this schema is a mild design decision; the skill makes it only when the spec
+  has no existing error schema at all.
 - If the spec already has any error schema (even a different shape), use that schema for
   new error responses. Do not replace or "improve" existing error schemas.
 - Shared responses (`components/responses`) are only created when there's actual
@@ -252,14 +255,13 @@ format and no format is currently set.
 | `uri`, `url`, `href`, `*_url`, `*_uri`, `website`, `homepage` | `uri`       |
 | `*_at`, `*_time`, `created`, `updated`, `timestamp`           | `date-time` |
 | `*_date`, `date_*`, `birthday`, `dob`                         | `date`      |
-| `*_id`, `uuid`, `guid` (string type, no existing format)      | `uuid`      |
+| `uuid`, `guid` (string type, no existing format)              | `uuid`      |
 | `ipv4`, `ip_address`, `*_ip`                                  | `ipv4`      |
 | `hostname`, `host`, `*_host`                                  | `hostname`  |
 
 **Boundaries:**
 
 - Only applied when `type: string` is already set and no `format` exists.
-- `*_id` to `uuid` is only applied when type is `string`. Integer IDs are left alone.
 - Ambiguous names (e.g., `address` — street or IP?) are skipped.
 - Never modify an existing `format`, even if it seems wrong.
 
@@ -297,15 +299,16 @@ knowledge, it's unsafe.
 Issues the skill notices but does not fix. These appear in the enhancement summary
 under "Flagged Observations" with a clear statement that they require human review.
 
-| Observation                                         | Why it's flagged, not fixed                                 |
-|-----------------------------------------------------|-------------------------------------------------------------|
-| Create and read use same schema (no NewX / X split) | Data model decision                                         |
-| Schema has properties but no `required` array       | Only the spec author knows which fields are mandatory       |
-| Response uses `200` for create instead of `201`     | Intentional design choice in some APIs                      |
-| No pagination on list endpoints                     | Architectural decision                                      |
-| Inconsistent ID field naming across resources       | Convention choice (`id` vs `gid` vs `resource_id`)          |
-| Inline schemas that could be extracted to `$ref`    | Structural refactoring                                      |
-| Description mentions enum values not in schema      | Spec author may have reasons for not constraining via enum  |
+| Observation                                         | Why it's flagged, not fixed                                |
+|-----------------------------------------------------|------------------------------------------------------------|
+| Create and read use same schema (no NewX / X split) | Data model decision                                        |
+| Schema has properties but no `required` array       | Only the spec author knows which fields are mandatory      |
+| Response uses `200` for create instead of `201`     | Intentional design choice in some APIs                     |
+| No pagination on list endpoints                     | Architectural decision                                     |
+| Inconsistent ID field naming across resources       | Convention choice (`id` vs `gid` vs `resource_id`)         |
+| Inline schemas that could be extracted to `$ref`    | Structural refactoring                                     |
+| Description mentions enum values not in schema      | Spec author may have reasons for not constraining via enum |
+| String `*_id` fields without `format`               | ID format varies by API (`uuid`, prefix, numeric string)   |
 
 Each flagged observation includes:
 
@@ -318,19 +321,64 @@ Each flagged observation includes:
 
 The skill must respect the OAS version detected in step 1:
 
-| Feature            | OAS 3.0.x                                    | OAS 3.1.x                                 |
-|--------------------|-----------------------------------------------|--------------------------------------------|
-| Nullable           | `nullable: true` on the property              | `type: [string, null]`                     |
-| Examples keyword   | `example` (singular) on Schema Object         | `example` or `examples` (JSON Schema)      |
-| Exclusive min/max  | `exclusiveMinimum: true` + `minimum: N`       | `exclusiveMinimum: N` (JSON Schema style)  |
-| Schema dialect     | Extended subset of JSON Schema Draft-04       | Full JSON Schema Draft 2020-12             |
+| Feature           | OAS 3.0.x                               | OAS 3.1.x                                 |
+|-------------------|-----------------------------------------|-------------------------------------------|
+| Nullable          | `nullable: true` on the property        | `type: [string, null]`                    |
+| Examples keyword  | `example` (singular) on Schema Object   | `example` or `examples` (JSON Schema)     |
+| Exclusive min/max | `exclusiveMinimum: true` + `minimum: N` | `exclusiveMinimum: N` (JSON Schema style) |
+| Schema dialect    | Extended subset of JSON Schema Draft-04 | Full JSON Schema Draft 2020-12            |
 
-**Rule:** Only use patterns valid for the detected version. Never add 3.1 syntax to a 3.0
-spec or vice versa.
+**Rules:**
+
+- Only use patterns valid for the detected version. Never add 3.1 syntax to a 3.0
+  spec or vice versa.
+- If a 3.1 spec already uses JSON Schema `examples` (array) on a property, add values
+  to that array. Do not add a parallel `example` (singular) field — two competing
+  example fields on the same property is confusing and some tools only read one.
 
 **OAS reference:**
+
 - 3.0.3: https://spec.openapis.org/oas/v3.0.3
 - 3.1.0: https://spec.openapis.org/oas/v3.1.0
+
+## Schema Navigation Rules
+
+### `$ref` Handling (version-aware)
+
+When a property uses `$ref`, the behavior depends on the OAS version:
+
+**OAS 3.0:** Sibling keywords next to `$ref` are ignored. Do NOT add `example` or
+`format` inline next to a `$ref`. Instead:
+
+1. Navigate to the referenced component schema.
+2. If the component is used by fields with consistent semantics (e.g., an `EmailAddress`
+   schema used only for email fields), add the enhancement to the component. Note in
+   the summary that the change affects all references.
+3. If the component is used by fields with different semantics (e.g., a generic
+   `StringField` used for both emails and names), skip the enhancement and flag it as
+   an observation: "Shared schema used in multiple contexts — enhancement skipped."
+
+**OAS 3.1:** Sibling keywords next to `$ref` are valid (JSON Schema 2020-12 behavior).
+You may add `example` inline next to a `$ref` to override the component's value for a
+specific use. This is preferred when the component serves multiple contexts and you want
+a context-specific example without modifying the shared schema.
+
+### Polymorphic Schemas (`oneOf` / `anyOf` / `allOf`)
+
+Do NOT add `format` or `example` annotations on properties that use `oneOf`, `anyOf`,
+or `allOf` unless the structure is trivially simple — specifically, a single-type
+nullable pattern like:
+
+```yaml
+# OAS 3.0 nullable via anyOf — trivially simple, safe to enhance
+anyOf:
+  - type: string
+  - type: "null"    # or using nullable: true on the wrapper
+```
+
+For multi-variant schemas (multiple object types, discriminator patterns, expandable
+ID+object patterns), skip the property and move on. These structures require human
+understanding of which variant to target.
 
 ## Enhancement Workflow
 
@@ -367,14 +415,14 @@ standard recommend or allow this change at this location?"
 
 For each planned enhancement, confirm:
 
-| Enhancement type      | Pre-apply check                                                    |
-|-----------------------|--------------------------------------------------------------------|
-| Property `example`    | Is the target a Schema Object? (`example` is valid on Schema Object, not on all objects) |
-| Media-type `example`  | Is the target a Media Type Object under `content`?                 |
-| `format` annotation   | Is the property `type: string`? Is the format value a recognized format for this OAS version? |
-| Error response (404)  | Does the operation already have a Responses Object? (required by OAS) |
-| Shared `$ref` response| Does the `$ref` target path follow the `#/components/responses/{name}` pattern? |
-| `requestBody.required`| Is this field on a Request Body Object (not some other object)?    |
+| Enhancement type       | Pre-apply check                                                                               |
+|------------------------|-----------------------------------------------------------------------------------------------|
+| Property `example`     | Is the target a Schema Object? (`example` is valid on Schema Object, not on all objects)      |
+| Media-type `example`   | Is the target a Media Type Object under `content`?                                            |
+| `format` annotation    | Is the property `type: string`? Is the format value a recognized format for this OAS version? |
+| Error response (404)   | Does the operation already have a Responses Object? (required by OAS)                         |
+| Shared `$ref` response | Does the `$ref` target path follow the `#/components/responses/{name}` pattern?               |
+| `requestBody.required` | Is this field on a Request Body Object (not some other object)?                               |
 
 **If a planned enhancement fails the pre-apply check:**
 
@@ -392,6 +440,10 @@ Write the enhanced spec directly.
 
 **Rules:**
 
+- **Apply changes incrementally** using targeted edits (one change at a time), not full
+  file rewrites. For each change, identify the exact insertion point and modify only that
+  section. This preserves formatting and makes each change individually reviewable in the
+  editor's diff view.
 - Preserve the spec's existing YAML/JSON formatting style
 - Insert new content adjacent to related existing content
 - Never reorder existing content
