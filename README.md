@@ -77,19 +77,23 @@ On Windows, download the `.zip`, extract `mimikos.exe`, and add it to your `PATH
 ## Quick Start
 
 ```bash
+# Download a sample spec (or use your own OpenAPI 3.x spec)
+curl -o petstore.yaml https://raw.githubusercontent.com/mimikos-io/mimikos/main/testdata/specs/petstore-3.1.yaml
+
 mimikos start petstore.yaml
 ```
 
 ```
-🎭 mimikos 0.2.0
-Spec: Petstore (OpenAPI 3.1.0)
+🎭 mimikos v0.3.9
+Spec: Petstore 3.1 (OpenAPI 3.1.0)
 Operations: 5 endpoints classified
 
-  GET     /pets                           → list       high
-  POST    /pets                           → create     high
-  GET     /pets/{petId}                   → fetch      high
-  DELETE  /pets/{petId}                   → delete     high
-  PATCH   /pets/{petId}                   → update     high
+  METHOD PATH          BEHAVIOR CONFIDENCE
+  GET    /pets/{petId} → fetch    high
+  DELETE /pets/{petId} → delete   high
+  PATCH  /pets/{petId} → update   high
+  GET    /pets         → list     high
+  POST   /pets         → create   high
 
 Listening on :8080 (deterministic mode, strict=false)
 ```
@@ -147,6 +151,86 @@ curl http://localhost:8080/pets/7
 
 Resources are stored in memory with LRU eviction. Use `--max-resources` to control capacity (default: 10,000).
 Restarting the server clears all state.
+
+---
+
+## Explore the Full Feature Set
+
+The Quick Start uses a minimal petstore spec. To see everything Mimikos handles — nested resources, wrapper-aware
+responses, example precedence, polymorphism, error schemas, and stateful patterns — try the
+[PetShop Pro](testdata/specs/petshop.yaml) demo spec:
+
+```bash
+curl -o petshop.yaml https://raw.githubusercontent.com/mimikos-io/mimikos/main/testdata/specs/petshop.yaml
+
+mimikos start petshop.yaml
+```
+
+**Example precedence** — media-type examples are returned as-is, property-level examples override generation, semantic
+mapping fills the rest:
+
+```bash
+# Media-type example: returned verbatim from the spec
+curl http://localhost:8080/store/inventory
+
+# Semantic mapping + format-aware generation
+curl http://localhost:8080/owners/1
+
+# Request a specific error response defined in the spec
+curl -H "X-Mimikos-Status: 404" http://localhost:8080/pets/42
+```
+
+**Stateful mode with nested resources:**
+
+```bash
+mimikos start --mode stateful petshop.yaml
+
+# Create a clinic
+curl -s -X POST http://localhost:8080/clinics \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Downtown Vet"}'
+# → {"data": {"clinic_id": "<id>", "name": "Downtown Vet", ...}}
+
+# Add rooms scoped to that clinic (use the returned clinic_id)
+curl -s -X POST http://localhost:8080/clinics/<id>/rooms \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Exam Room A"}'
+
+# Rooms are scoped to their parent clinic
+curl http://localhost:8080/clinics/<id>/rooms
+```
+
+See the full [feature coverage matrix](testdata/README.md) for what each endpoint exercises, or visit the
+[Getting Started guide](https://mimikos.dev/getting-started/) on the documentation site.
+
+---
+
+## AI Agent Skills
+
+Mimikos ships two AI agent skills for Claude Code and Cursor — one improves your spec, the other populates your mock
+server with test data.
+
+### Spec Enhancement
+
+Improves your OpenAPI spec by adding examples, error responses, request body markers, and format annotations. The agent
+gathers context from your source code and tests before making changes, so examples reflect your actual domain — not
+generic placeholders.
+
+**What it adds:** property-level examples, media-type examples, 404/422 error responses with shared schemas,
+`required: true` on POST/PUT request bodies, `format` annotations on typed fields.
+
+Setup and usage: [skills/mimikos-enhance/](skills/mimikos-enhance/README.md)
+
+### Stateful Mode Seeding
+
+Seeds a running Mimikos instance in stateful mode with test data. The agent reads your spec, determines resource
+dependency order, constructs valid request bodies, and sends POST requests — replacing manual curl commands with a
+single agent invocation.
+
+**What it does:** discovers create endpoints, resolves parent-child ordering, constructs schema-valid request bodies,
+sends requests, extracts generated IDs, and verifies the seeded state.
+
+Setup and usage: [skills/mimikos-seed/](skills/mimikos-seed/README.md)
 
 ---
 
@@ -212,6 +296,7 @@ make fix            # Auto-format + tidy
 
 ## Links
 
+- **Documentation**: https://mimikos.dev/getting-started/ — guides, reference, and troubleshooting
 - **Changelog**: [CHANGELOG.md](CHANGELOG.md) — release history
 - **Issues**: https://github.com/mimikos-io/mimikos/issues
 
