@@ -27,7 +27,7 @@ seeded state — turning a 10-minute manual task into a 30-second automated one.
 
 ## Skill Files
 
-Download both files from the Mimikos repository:
+Download the skill directory from the Mimikos repository:
 
 - [`SKILL.md`](https://github.com/mimikos-io/mimikos/blob/main/skills/mimikos-seed/SKILL.md)
   — main skill instructions (required)
@@ -36,16 +36,12 @@ Download both files from the Mimikos repository:
 
 ## Setup: Claude Code
 
-Place `SKILL.md` in your project's Claude Code commands directory:
+Copy the `mimikos-seed/` directory into your project's skills directory:
 
 ```
-.claude/commands/mimikos-seed.md
-```
-
-To include the examples (recommended), concatenate both files into one command file:
-
-```
-.claude/commands/mimikos-seed.md  ← contents of SKILL.md + examples.md
+.claude/skills/mimikos-seed/
+├── SKILL.md
+└── examples.md
 ```
 
 Then in Claude Code, invoke it with:
@@ -59,13 +55,12 @@ it to seed, populate, or create test data for Mimikos.
 
 ## Setup: Cursor
 
-Place `SKILL.md` in your project's Cursor rules directory:
+Cursor uses `.cursor/rules/` with `.mdc` files. Concatenate `SKILL.md` and
+`examples.md` into a single rules file:
 
 ```
 .cursor/rules/mimikos-seed.mdc
 ```
-
-To include the examples, concatenate both files into the rules file.
 
 ## Prerequisites
 

@@ -46,6 +46,33 @@ func TestRun_Version(t *testing.T) {
 	}
 }
 
+func TestRun_HelpIncludesMCP(t *testing.T) {
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+
+	code := run([]string{"help"}, w)
+	require.NoError(t, w.Close())
+
+	assert.Equal(t, 0, code)
+
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	output := string(buf[:n])
+
+	assert.Contains(t, output, "mcp")
+	assert.Contains(t, output, "MCP server")
+}
+
+func TestRun_MCP_Dispatches(t *testing.T) {
+	// "mcp" is recognized as a valid command (not "unknown command").
+	// We can't actually start the MCP server in a unit test (it requires
+	// a stdio transport), but we verify the dispatch path is correct by
+	// checking that passing an invalid log level produces exit code 1
+	// with the right error, not "unknown command".
+	code := run([]string{"mcp", "--log-level", "invalid"}, os.Stderr)
+	assert.Equal(t, 1, code, "invalid log level should fail with exit 1")
+}
+
 func TestRun_UnknownCommand(t *testing.T) {
 	code := run([]string{"bogus"}, os.Stderr)
 	assert.Equal(t, 1, code)

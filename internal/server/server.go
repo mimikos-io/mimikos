@@ -23,40 +23,30 @@ import (
 	"github.com/mimikos-io/mimikos/internal/validator"
 )
 
-type (
-	// Config holds all configuration for building and starting the server.
-	Config struct {
-		// Strict enables strict response validation mode. When true, responses
-		// that fail schema validation return 500 instead of a warning log.
-		Strict bool
+// Config holds all configuration for building and starting the server.
+type Config struct {
+	// Strict enables strict response validation mode. When true, responses
+	// that fail schema validation return 500 instead of a warning log.
+	Strict bool
 
-		// MaxDepth is the maximum recursion depth for data generation.
-		// Zero uses the default (3).
-		MaxDepth int
+	// MaxDepth is the maximum recursion depth for data generation.
+	// Zero uses the default (3).
+	MaxDepth int
 
-		// Logger is the structured logger for startup diagnostics.
-		// Nil uses a no-op logger.
-		Logger *slog.Logger
+	// Logger is the structured logger for startup diagnostics.
+	// Nil uses a no-op logger.
+	Logger *slog.Logger
 
-		// Mode selects the operating mode. Default (zero value) is deterministic.
-		Mode model.OperatingMode
+	// Mode selects the operating mode. Default (zero value) is deterministic.
+	Mode model.OperatingMode
 
-		// MaxResources is the state store capacity for stateful mode.
-		// Zero uses the default (10,000).
-		MaxResources int
-	}
-
-	// discardHandler is a slog.Handler that discards all log output.
-	discardHandler struct{}
-)
-
-func (discardHandler) Enabled(context.Context, slog.Level) bool  { return false }
-func (discardHandler) Handle(context.Context, slog.Record) error { return nil }
-func (d discardHandler) WithAttrs([]slog.Attr) slog.Handler      { return d }
-func (d discardHandler) WithGroup(string) slog.Handler           { return d }
+	// MaxResources is the state store capacity for stateful mode.
+	// Zero uses the default (10,000).
+	MaxResources int
+}
 
 // StartupResult carries diagnostic info produced during server assembly
-// for CLI startup logging.
+// for CLI startup logging and MCP tool access.
 type StartupResult struct {
 	SpecTitle       string
 	SpecVersion     string
@@ -67,6 +57,10 @@ type StartupResult struct {
 	DegradedPaths   []string // "METHOD /path" for each degraded endpoint
 	Entries         []EntryInfo
 	Mode            model.OperatingMode
+
+	// BehaviorMap is the classified behavior map built from the spec. Exposed
+	// so the MCP layer can query endpoint details without re-parsing the spec.
+	BehaviorMap *model.BehaviorMap
 }
 
 // EntryInfo holds per-operation info for startup logging.
@@ -83,7 +77,7 @@ type EntryInfo struct {
 func Build(ctx context.Context, specBytes []byte, cfg Config) (http.Handler, *StartupResult, error) {
 	logger := cfg.Logger
 	if logger == nil {
-		logger = slog.New(discardHandler{})
+		logger = slog.New(slog.DiscardHandler)
 	}
 
 	doc, err := libopenapi.NewDocument(specBytes)
@@ -196,5 +190,6 @@ func buildStartupResult(
 		DegradedPaths:   degradedPaths,
 		Entries:         entries,
 		Mode:            mode,
+		BehaviorMap:     bm,
 	}
 }
