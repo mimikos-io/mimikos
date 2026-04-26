@@ -17,8 +17,10 @@ import (
 	"syscall"
 	"time"
 
+	mcpserver "github.com/mimikos-io/mimikos/internal/mcp"
 	"github.com/mimikos-io/mimikos/internal/model"
 	"github.com/mimikos-io/mimikos/internal/server"
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // Build-time variables injected via ldflags. When not set (e.g., go install),
@@ -79,6 +81,8 @@ func run(args []string, out *os.File) int {
 	switch args[0] {
 	case "start":
 		return runStart(args[1:], out)
+	case "mcp":
+		return runMCP(args[1:], out)
 	case "--help", "-h", "help":
 		printUsage(out)
 
@@ -292,6 +296,43 @@ func runStart(args []string, out *os.File) int {
 	}
 }
 
+// runMCP implements the "mcp" subcommand. It starts an MCP server over stdio
+// that exposes Mimikos tools to AI agents. Diagnostics go to stderr only —
+// stdout is reserved for the MCP transport.
+func runMCP(args []string, out *os.File) int {
+	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
+	fs.SetOutput(out)
+
+	logLevel := fs.String("log-level", "info", "logging verbosity (debug, info, warn, error)")
+
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+
+	level, err := parseLogLevel(*logLevel)
+	if err != nil {
+		_, _ = fmt.Fprintf(out, "error: %s\n", err)
+
+		return 1
+	}
+
+	// MCP diagnostics go to stderr, never stdout (stdout is the transport).
+	logger := slog.New(slog.NewTextHandler(out, &slog.HandlerOptions{Level: level}))
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	srv := mcpserver.NewServer(version, logger)
+
+	if err := srv.Run(ctx, &sdkmcp.StdioTransport{}); err != nil {
+		_, _ = fmt.Fprintf(out, "error: MCP server failed: %s\n", err)
+
+		return 1
+	}
+
+	return 0
+}
+
 // printStartupSummary writes the human-friendly startup banner.
 func printStartupSummary(out *os.File, result *server.StartupResult, port int, strict bool) {
 	_, _ = fmt.Fprintf(out, "🎭 mimikos %s\n", version)
@@ -385,9 +426,11 @@ func printUsage(out *os.File) {
 	_, _ = fmt.Fprintln(out)
 	_, _ = fmt.Fprintln(out, "Usage:")
 	_, _ = fmt.Fprintln(out, "  mimikos start [flags] <spec-path>")
+	_, _ = fmt.Fprintln(out, "  mimikos mcp [flags]")
 	_, _ = fmt.Fprintln(out)
 	_, _ = fmt.Fprintln(out, "Commands:")
 	_, _ = fmt.Fprintln(out, "  start       Start the mock server")
+	_, _ = fmt.Fprintln(out, "  mcp         Start as MCP server (for AI agent integration)")
 	_, _ = fmt.Fprintln(out, "  version     Show version information")
 	_, _ = fmt.Fprintln(out, "  help        Show this help message")
 	_, _ = fmt.Fprintln(out)
