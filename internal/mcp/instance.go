@@ -20,6 +20,10 @@ const (
 
 	// shutdownTimeout is the maximum time for graceful shutdown.
 	shutdownTimeout = 5 * time.Second
+
+	// defaultRequestLogCapacity is the number of entries the request log
+	// ring buffer holds.
+	defaultRequestLogCapacity = 100
 )
 
 // timeNow returns the current time. Replaced in tests for deterministic uptime.
@@ -89,18 +93,20 @@ type StatusResult struct {
 // At most one mock server is active at a time (single-instance model).
 // All methods are safe for concurrent use.
 type Instance struct {
-	mu            sync.Mutex
-	running       bool
-	srv           *http.Server
-	handler       http.Handler
-	behaviorMap   *model.BehaviorMap
-	startupResult *server.StartupResult
-	store         state.Store
-	startedAt     time.Time
-	port          int
-	mode          model.OperatingMode
-	specTitle     string
-	specVersion   string
+	mu              sync.Mutex
+	running         bool
+	srv             *http.Server
+	handler         http.Handler
+	behaviorMap     *model.BehaviorMap
+	startupResult   *server.StartupResult
+	store           state.Store
+	requestLog      *RequestLog
+	statusOverrides *StatusOverrides
+	startedAt       time.Time
+	port            int
+	mode            model.OperatingMode
+	specTitle       string
+	specVersion     string
 }
 
 // Start reads the OpenAPI spec, builds the HTTP handler via server.Build, binds
@@ -125,7 +131,7 @@ func (inst *Instance) Start(ctx context.Context, cfg StartConfig) error {
 	}
 
 	// Build the HTTP handler from the spec.
-	handler, result, err := server.Build(ctx, cfg.SpecBytes, server.Config{
+	routerHandler, result, err := server.Build(ctx, cfg.SpecBytes, server.Config{
 		Strict:   cfg.Strict,
 		MaxDepth: cfg.MaxDepth,
 		Mode:     mode,
@@ -133,6 +139,14 @@ func (inst *Instance) Start(ctx context.Context, cfg StartConfig) error {
 	if err != nil {
 		return fmt.Errorf("cannot start server: %w", err)
 	}
+
+	// Wrap with MCP middleware: status override → request log → router.
+	reqLog := NewRequestLog(defaultRequestLogCapacity)
+	overrides := NewStatusOverrides()
+
+	handler := StatusOverrideMiddleware(overrides)(
+		RequestLogMiddleware(reqLog)(routerHandler),
+	)
 
 	// Bind the TCP listener to confirm the port is available.
 	addr := fmt.Sprintf(":%d", cfg.Port)
@@ -155,11 +169,20 @@ func (inst *Instance) Start(ctx context.Context, cfg StartConfig) error {
 	}()
 
 	// Record instance state.
+	//
+	// handler stores the unwrapped router handler, not the middleware-wrapped
+	// one. This is intentional: manage_state HTTP delegation goes through the
+	// router directly so MCP-initiated operations don't appear in the request
+	// log (they're tool calls, not external HTTP traffic) and don't trigger
+	// status overrides (which target external requests).
 	inst.running = true
 	inst.srv = srv
-	inst.handler = handler
+	inst.handler = routerHandler
 	inst.behaviorMap = result.BehaviorMap
 	inst.startupResult = result
+	inst.store = result.Store
+	inst.requestLog = reqLog
+	inst.statusOverrides = overrides
 	inst.port = cfg.Port
 	inst.mode = mode
 	inst.specTitle = result.SpecTitle
@@ -191,6 +214,8 @@ func (inst *Instance) Stop(ctx context.Context) error {
 	inst.behaviorMap = nil
 	inst.startupResult = nil
 	inst.store = nil
+	inst.requestLog = nil
+	inst.statusOverrides = nil
 	inst.port = 0
 	inst.mode = ""
 	inst.specTitle = ""
@@ -231,6 +256,93 @@ func (inst *Instance) IsRunning() bool {
 	defer inst.mu.Unlock()
 
 	return inst.running
+}
+
+// Endpoints returns all behavior map entries. Returns nil if no server is
+// running.
+func (inst *Instance) Endpoints() []model.BehaviorEntry {
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+
+	if inst.behaviorMap == nil {
+		return nil
+	}
+
+	return inst.behaviorMap.Entries()
+}
+
+// GetEndpoint looks up a single endpoint by method and path pattern. Returns
+// the entry and true if found, or a zero value and false if not found or no
+// server is running.
+func (inst *Instance) GetEndpoint(method, path string) (model.BehaviorEntry, bool) {
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+
+	if inst.behaviorMap == nil {
+		return model.BehaviorEntry{}, false
+	}
+
+	return inst.behaviorMap.Get(method, path)
+}
+
+// StartupEntries returns the per-operation info from the last startup. Returns
+// nil if no server is running.
+func (inst *Instance) StartupEntries() []server.EntryInfo {
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+
+	if inst.startupResult == nil {
+		return nil
+	}
+
+	return inst.startupResult.Entries
+}
+
+// Handler returns the HTTP handler of the running server. Returns nil if no
+// server is running.
+func (inst *Instance) Handler() http.Handler {
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+
+	return inst.handler
+}
+
+// Mode returns the operating mode of the running server. Returns empty string
+// if no server is running.
+func (inst *Instance) Mode() model.OperatingMode {
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+
+	return inst.mode
+}
+
+// Store returns the state store of the running server. Returns nil if no server
+// is running or the server is in deterministic mode.
+//
+//nolint:ireturn // Store is an interface by design — callers need Reset().
+func (inst *Instance) Store() state.Store {
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+
+	return inst.store
+}
+
+// ReqLog returns the request log of the running server. Returns nil if no
+// server is running.
+func (inst *Instance) ReqLog() *RequestLog {
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+
+	return inst.requestLog
+}
+
+// Overrides returns the status overrides of the running server. Returns nil if
+// no server is running.
+func (inst *Instance) Overrides() *StatusOverrides {
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+
+	return inst.statusOverrides
 }
 
 // parseMode converts a mode string to model.OperatingMode with a

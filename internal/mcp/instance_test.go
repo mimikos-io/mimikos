@@ -298,20 +298,16 @@ func TestInstance_Start_PopulatesBehaviorMap(t *testing.T) {
 
 	inst, _ := startTestInstance(t)
 
-	inst.mu.Lock()
-	bm := inst.behaviorMap
-	inst.mu.Unlock()
+	entries := inst.Endpoints()
+	require.Len(t, entries, 3, "petstore-3.0 should have 3 endpoints")
 
-	require.NotNil(t, bm)
-	assert.Equal(t, 3, bm.Len(), "petstore-3.0 should have 3 endpoints")
-
-	_, ok := bm.Get("GET", "/pets")
+	_, ok := inst.GetEndpoint("GET", "/pets")
 	assert.True(t, ok, "should find GET /pets")
 
-	_, ok = bm.Get("POST", "/pets")
+	_, ok = inst.GetEndpoint("POST", "/pets")
 	assert.True(t, ok, "should find POST /pets")
 
-	_, ok = bm.Get("GET", "/pets/{petId}")
+	_, ok = inst.GetEndpoint("GET", "/pets/{petId}")
 	assert.True(t, ok, "should find GET /pets/{petId}")
 }
 
@@ -326,14 +322,14 @@ func TestInstance_Stop_ClearsState(t *testing.T) {
 
 	require.NoError(t, inst.Stop(context.Background()))
 
-	inst.mu.Lock()
-	defer inst.mu.Unlock()
+	assert.False(t, inst.IsRunning())
+	assert.Nil(t, inst.Handler())
+	assert.Nil(t, inst.Endpoints())
+	assert.Nil(t, inst.StartupEntries())
+	assert.Nil(t, inst.Store())
+	assert.Empty(t, inst.Mode())
 
-	assert.Nil(t, inst.srv)
-	assert.Nil(t, inst.handler)
-	assert.Nil(t, inst.behaviorMap)
-	assert.Nil(t, inst.startupResult)
-	assert.Equal(t, 0, inst.port)
-	assert.Empty(t, inst.mode)
-	assert.Empty(t, inst.specTitle)
+	status := inst.Status()
+	assert.Equal(t, 0, status.Port)
+	assert.Empty(t, status.SpecTitle)
 }

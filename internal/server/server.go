@@ -61,6 +61,10 @@ type StartupResult struct {
 	// BehaviorMap is the classified behavior map built from the spec. Exposed
 	// so the MCP layer can query endpoint details without re-parsing the spec.
 	BehaviorMap *model.BehaviorMap
+
+	// Store is the state store for stateful mode. Nil in deterministic mode.
+	// Exposed so the MCP layer can call Reset without HTTP delegation.
+	Store state.Store
 }
 
 // EntryInfo holds per-operation info for startup logging.
@@ -148,7 +152,7 @@ func Build(ctx context.Context, specBytes []byte, cfg Config) (http.Handler, *St
 	// Wire router.
 	handler := router.NewHandler(bm, failed, v, responder, gen, cfg.Strict, logger, mode, store)
 
-	return handler, buildStartupResult(spec, bm, failed, mode), nil
+	return handler, buildStartupResult(spec, bm, failed, mode, store), nil
 }
 
 // buildStartupResult collects diagnostic info from the startup pipeline.
@@ -157,6 +161,7 @@ func buildStartupResult(
 	bm *model.BehaviorMap,
 	failed []builder.FailedEntry,
 	mode model.OperatingMode,
+	store state.Store,
 ) *StartupResult {
 	entries := make([]EntryInfo, 0, bm.Len())
 
@@ -191,5 +196,6 @@ func buildStartupResult(
 		Entries:         entries,
 		Mode:            mode,
 		BehaviorMap:     bm,
+		Store:           store,
 	}
 }

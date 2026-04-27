@@ -62,4 +62,7 @@ func (s *Server) registerTools() {
 	s.registerServerStatus()
 	s.registerListEndpoints()
 	s.registerGetEndpoint()
+	s.registerManageState()
+	s.registerRequestStatus()
+	s.registerGetRequestLog()
 }

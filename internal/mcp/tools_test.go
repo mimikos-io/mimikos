@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,6 +22,14 @@ func petstoreSpecPath(t *testing.T) string {
 	t.Helper()
 
 	return filepath.Join(testdataDir(t), "specs", "petstore-3.0.yaml")
+}
+
+// petstore31SpecPath returns the absolute path to the petstore-3.1.yaml spec,
+// which includes DELETE and PATCH operations not present in petstore-3.0.
+func petstore31SpecPath(t *testing.T) string {
+	t.Helper()
+
+	return filepath.Join(testdataDir(t), "specs", "petstore-3.1.yaml")
 }
 
 // callTool is a helper that invokes a tool on a connected MCP server via
@@ -154,7 +163,7 @@ func setupMCPSessionWithServer(t *testing.T) (*mcp.ClientSession, *Server) {
 
 // --- Tool registration ---
 
-func TestToolRegistration_ExactlyFiveTools(t *testing.T) {
+func TestToolRegistration_ExactlyEightTools(t *testing.T) {
 	session := setupMCPSession(t)
 
 	result, err := session.ListTools(
@@ -168,6 +177,9 @@ func TestToolRegistration_ExactlyFiveTools(t *testing.T) {
 		"server_status",
 		"list_endpoints",
 		"get_endpoint",
+		"manage_state",
+		"request_status",
+		"get_request_log",
 	}
 
 	gotNames := make([]string, len(result.Tools))
@@ -588,4 +600,390 @@ func TestGetEndpoint_NotRunning(t *testing.T) {
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "No Mimikos server is running")
 	assert.Contains(t, resultText(t, result), "start_server")
+}
+
+// --- manage_state tests ---
+
+// startStatefulServer is a helper that starts the petstore in stateful mode.
+func startStatefulServer(
+	t *testing.T,
+	session *mcp.ClientSession,
+) {
+	t.Helper()
+
+	result := callTool(t, session, "start_server", map[string]any{
+		"specPath": petstoreSpecPath(t),
+		"port":     freePort(t),
+		"mode":     "stateful",
+	})
+	require.False(t, result.IsError,
+		"start_server (stateful) should succeed: %s", resultText(t, result))
+}
+
+func TestManageState_CreateAndList(t *testing.T) {
+	if testing.Short() {
+		t.Skip("binds a TCP port")
+	}
+
+	session, _ := setupMCPSessionWithServer(t)
+	startStatefulServer(t, session)
+
+	// Create a pet (Pet schema requires id + name).
+	result := callTool(t, session, "manage_state", map[string]any{
+		"action": "create",
+		"path":   "/pets",
+		"body":   map[string]any{"id": 1, "name": "Buddy", "tag": "dog"},
+	})
+
+	assert.False(t, result.IsError,
+		"create should succeed: %s", resultText(t, result))
+
+	data := resultJSON(t, result)
+	assert.InDelta(t, 201.0, data["status_code"], 0.1)
+
+	// List pets.
+	result = callTool(t, session, "manage_state", map[string]any{
+		"action": "list",
+		"path":   "/pets",
+	})
+
+	assert.False(t, result.IsError,
+		"list should succeed: %s", resultText(t, result))
+}
+
+func TestManageState_GetResource(t *testing.T) {
+	if testing.Short() {
+		t.Skip("binds a TCP port")
+	}
+
+	session, _ := setupMCPSessionWithServer(t)
+	startStatefulServer(t, session)
+
+	// Create a pet first (Pet schema requires id + name).
+	result := callTool(t, session, "manage_state", map[string]any{
+		"action": "create",
+		"path":   "/pets",
+		"body":   map[string]any{"id": 42, "name": "Rex", "tag": "dog"},
+	})
+	require.False(t, result.IsError,
+		"create should succeed: %s", resultText(t, result))
+
+	// Get the resource by ID — petstore uses /pets/{petId}.
+	result = callTool(t, session, "manage_state", map[string]any{
+		"action": "get",
+		"path":   "/pets/42",
+	})
+
+	assert.False(t, result.IsError,
+		"get should succeed: %s", resultText(t, result))
+
+	getData := resultJSON(t, result)
+	assert.InDelta(t, 200.0, getData["status_code"], 0.1)
+}
+
+func TestManageState_DeleteResource(t *testing.T) {
+	if testing.Short() {
+		t.Skip("binds a TCP port")
+	}
+
+	session, _ := setupMCPSessionWithServer(t)
+	startStatefulServer(t, session)
+
+	// Create a pet (Pet schema requires id + name).
+	result := callTool(t, session, "manage_state", map[string]any{
+		"action": "create",
+		"path":   "/pets",
+		"body":   map[string]any{"id": 99, "name": "Luna", "tag": "cat"},
+	})
+	require.False(t, result.IsError,
+		"create should succeed: %s", resultText(t, result))
+
+	// Delete it.
+	result = callTool(t, session, "manage_state", map[string]any{
+		"action": "delete",
+		"path":   "/pets/99",
+	})
+
+	assert.False(t, result.IsError,
+		"delete should succeed: %s", resultText(t, result))
+}
+
+func TestManageState_Reset(t *testing.T) {
+	if testing.Short() {
+		t.Skip("binds a TCP port")
+	}
+
+	session, _ := setupMCPSessionWithServer(t)
+	startStatefulServer(t, session)
+
+	// Create a pet (Pet schema requires id + name).
+	result := callTool(t, session, "manage_state", map[string]any{
+		"action": "create",
+		"path":   "/pets",
+		"body":   map[string]any{"id": 7, "name": "Fido", "tag": "dog"},
+	})
+	require.False(t, result.IsError)
+
+	// Reset.
+	result = callTool(t, session, "manage_state", map[string]any{
+		"action": "reset",
+	})
+
+	assert.False(t, result.IsError,
+		"reset should succeed: %s", resultText(t, result))
+
+	data := resultJSON(t, result)
+	assert.Equal(t, true, data["reset"])
+}
+
+func TestManageState_MissingPath(t *testing.T) {
+	if testing.Short() {
+		t.Skip("binds a TCP port")
+	}
+
+	session, _ := setupMCPSessionWithServer(t)
+	startStatefulServer(t, session)
+
+	result := callTool(t, session, "manage_state", map[string]any{
+		"action": "list",
+		// no path
+	})
+
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "path")
+}
+
+func TestManageState_MissingBodyForCreate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("binds a TCP port")
+	}
+
+	session, _ := setupMCPSessionWithServer(t)
+	startStatefulServer(t, session)
+
+	result := callTool(t, session, "manage_state", map[string]any{
+		"action": "create",
+		"path":   "/pets",
+		// no body
+	})
+
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "body")
+}
+
+func TestManageState_DeterministicModeError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("binds a TCP port")
+	}
+
+	session, _ := setupMCPSessionWithServer(t)
+
+	// Start in deterministic mode (default).
+	result := callTool(t, session, "start_server", map[string]any{
+		"specPath": petstoreSpecPath(t),
+		"port":     freePort(t),
+	})
+	require.False(t, result.IsError)
+
+	result = callTool(t, session, "manage_state", map[string]any{
+		"action": "list",
+		"path":   "/pets",
+	})
+
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "stateful")
+}
+
+func TestManageState_NotRunning(t *testing.T) {
+	session := setupMCPSession(t)
+
+	result := callTool(t, session, "manage_state", map[string]any{
+		"action": "list",
+		"path":   "/pets",
+	})
+
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "No Mimikos server is running")
+}
+
+func TestManageState_InvalidAction(t *testing.T) {
+	if testing.Short() {
+		t.Skip("binds a TCP port")
+	}
+
+	session, _ := setupMCPSessionWithServer(t)
+	startStatefulServer(t, session)
+
+	result := callTool(t, session, "manage_state", map[string]any{
+		"action": "purge",
+		"path":   "/pets",
+	})
+
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "Unknown action")
+}
+
+// --- request_status tests ---
+
+func TestRequestStatus_SetsOverride(t *testing.T) {
+	if testing.Short() {
+		t.Skip("binds a TCP port")
+	}
+
+	session, _ := setupMCPSessionWithServer(t)
+
+	result := callTool(t, session, "start_server", map[string]any{
+		"specPath": petstoreSpecPath(t),
+		"port":     freePort(t),
+	})
+	require.False(t, result.IsError)
+
+	// Use concrete path, not pattern.
+	result = callTool(t, session, "request_status", map[string]any{
+		"method":     "GET",
+		"path":       "/pets",
+		"statusCode": 500,
+	})
+
+	assert.False(t, result.IsError,
+		"request_status should succeed: %s", resultText(t, result))
+
+	data := resultJSON(t, result)
+	assert.Equal(t, true, data["set"])
+}
+
+func TestRequestStatus_AcceptsAnyPath(t *testing.T) {
+	if testing.Short() {
+		t.Skip("binds a TCP port")
+	}
+
+	session, _ := setupMCPSessionWithServer(t)
+
+	result := callTool(t, session, "start_server", map[string]any{
+		"specPath": petstoreSpecPath(t),
+		"port":     freePort(t),
+	})
+	require.False(t, result.IsError)
+
+	// Override for a path that may not match any endpoint — should still
+	// succeed. The override simply won't be consumed if no request matches.
+	result = callTool(t, session, "request_status", map[string]any{
+		"method":     "DELETE",
+		"path":       "/nonexistent",
+		"statusCode": 404,
+	})
+
+	assert.False(t, result.IsError,
+		"request_status should accept any path: %s", resultText(t, result))
+}
+
+func TestRequestStatus_NotRunning(t *testing.T) {
+	session := setupMCPSession(t)
+
+	result := callTool(t, session, "request_status", map[string]any{
+		"method":     "GET",
+		"path":       "/pets",
+		"statusCode": 500,
+	})
+
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "No Mimikos server is running")
+}
+
+// --- get_request_log tests ---
+
+func TestGetRequestLog_ReturnsEntries(t *testing.T) {
+	if testing.Short() {
+		t.Skip("binds a TCP port")
+	}
+
+	session, _ := setupMCPSessionWithServer(t)
+	port := freePort(t)
+
+	result := callTool(t, session, "start_server", map[string]any{
+		"specPath": petstoreSpecPath(t),
+		"port":     port,
+	})
+	require.False(t, result.IsError)
+
+	// Make some HTTP requests to populate the log.
+	for _, path := range []string{"/pets", "/pets", "/pets/123"} {
+		req, err := http.NewRequestWithContext(
+			context.Background(), http.MethodGet,
+			fmt.Sprintf("http://localhost:%d%s", port, path), nil,
+		)
+		require.NoError(t, err)
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+
+		resp.Body.Close()
+	}
+
+	// Get request log.
+	result = callTool(t, session, "get_request_log", nil)
+
+	assert.False(t, result.IsError,
+		"get_request_log should succeed: %s", resultText(t, result))
+
+	// Parse as array.
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal(
+		[]byte(resultText(t, result)), &entries,
+	))
+	assert.Len(t, entries, 3)
+
+	// Newest first.
+	assert.Equal(t, "/pets/123", entries[0]["path"])
+}
+
+func TestGetRequestLog_RespectsLimit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("binds a TCP port")
+	}
+
+	session, _ := setupMCPSessionWithServer(t)
+	port := freePort(t)
+
+	result := callTool(t, session, "start_server", map[string]any{
+		"specPath": petstoreSpecPath(t),
+		"port":     port,
+	})
+	require.False(t, result.IsError)
+
+	// Make 3 requests.
+	for range 3 {
+		req, err := http.NewRequestWithContext(
+			context.Background(), http.MethodGet,
+			fmt.Sprintf("http://localhost:%d/pets", port), nil,
+		)
+		require.NoError(t, err)
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+
+		resp.Body.Close()
+	}
+
+	// Get only 1.
+	result = callTool(t, session, "get_request_log", map[string]any{
+		"limit": 1,
+	})
+
+	assert.False(t, result.IsError)
+
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal(
+		[]byte(resultText(t, result)), &entries,
+	))
+	assert.Len(t, entries, 1)
+}
+
+func TestGetRequestLog_NotRunning(t *testing.T) {
+	session := setupMCPSession(t)
+
+	result := callTool(t, session, "get_request_log", nil)
+
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "No Mimikos server is running")
 }
