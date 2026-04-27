@@ -1,15 +1,19 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/mimikos-io/mimikos/internal/classifier"
+	"github.com/mimikos-io/mimikos/internal/model"
 )
 
 type (
@@ -32,17 +36,38 @@ type (
 		Path   string `json:"path"   jsonschema:"Path pattern (e.g. /pets/{petId})"`
 	}
 
+	// endpointInfo is the JSON shape for endpoint summaries in tool responses.
 	endpointInfo struct {
 		Method     string `json:"method"`
 		Path       string `json:"path"`
 		Behavior   string `json:"behavior"`
 		Confidence string `json:"confidence"`
 	}
+
+	// manageStateArgs holds the input parameters for the manage_state tool.
+	manageStateArgs struct {
+		Action string         `json:"action"         jsonschema:"Action: list, get, create, update, delete, or reset"`
+		Path   string         `json:"path,omitempty" jsonschema:"Resource path (required for all actions except reset)"`
+		Body   map[string]any `json:"body,omitempty" jsonschema:"Request body (required for create)"`
+	}
+
+	// requestStatusArgs holds the input parameters for the request_status tool.
+	requestStatusArgs struct {
+		Method     string `json:"method"     jsonschema:"HTTP method (GET, POST, PUT, PATCH, DELETE)"`
+		Path       string `json:"path"       jsonschema:"Concrete URL path (e.g. /pets/42, not /pets/{petId})"`
+		StatusCode int    `json:"statusCode" jsonschema:"HTTP status code to return on the next request"`
+	}
+
+	// getRequestLogArgs holds the input parameters for the get_request_log tool.
+	getRequestLogArgs struct {
+		Limit int `json:"limit,omitempty" jsonschema:"Max entries to return, newest first (default 20)"`
+	}
 )
 
 const (
-	defaultPort     = 8080
-	defaultMaxDepth = 10
+	defaultPort            = 8080
+	defaultMaxDepth        = 10
+	defaultRequestLogLimit = 20
 )
 
 // registerStartServer registers the start_server tool with the MCP server.
@@ -101,10 +126,7 @@ func (s *Server) handleStartServer(
 
 	// Build response with endpoint summary.
 	status := s.instance.Status()
-
-	s.instance.mu.Lock()
-	entries := s.instance.startupResult.Entries
-	s.instance.mu.Unlock()
+	entries := s.instance.StartupEntries()
 
 	endpoints := make([]endpointInfo, 0, status.Operations)
 	for _, e := range entries {
@@ -210,26 +232,16 @@ func (s *Server) handleListEndpoints(
 	_ *mcp.CallToolRequest,
 	_ struct{},
 ) (*mcp.CallToolResult, any, error) {
-	if !s.instance.IsRunning() {
+	entries := s.instance.Endpoints()
+	if entries == nil {
 		return toolError(
 			"No Mimikos server is running. Call start_server first.",
 		), nil, nil
 	}
 
-	s.instance.mu.Lock()
-	entries := s.instance.behaviorMap.Entries()
-	s.instance.mu.Unlock()
-
-	type endpointSummary struct {
-		Method     string `json:"method"`
-		Path       string `json:"path"`
-		Behavior   string `json:"behavior"`
-		Confidence string `json:"confidence"`
-	}
-
-	endpoints := make([]endpointSummary, 0, len(entries))
+	endpoints := make([]endpointInfo, 0, len(entries))
 	for _, e := range entries {
-		endpoints = append(endpoints, endpointSummary{
+		endpoints = append(endpoints, endpointInfo{
 			Method:     e.Method,
 			Path:       e.PathPattern,
 			Behavior:   string(e.Type),
@@ -255,19 +267,16 @@ func (s *Server) handleGetEndpoint(
 	_ *mcp.CallToolRequest,
 	args getEndpointArgs,
 ) (*mcp.CallToolResult, any, error) {
-	if !s.instance.IsRunning() {
-		return toolError(
-			"No Mimikos server is running. Call start_server first.",
-		), nil, nil
-	}
-
 	method := strings.ToUpper(args.Method)
 
-	s.instance.mu.Lock()
-	entry, ok := s.instance.behaviorMap.Get(method, args.Path)
-	s.instance.mu.Unlock()
-
+	entry, ok := s.instance.GetEndpoint(method, args.Path)
 	if !ok {
+		if !s.instance.IsRunning() {
+			return toolError(
+				"No Mimikos server is running. Call start_server first.",
+			), nil, nil
+		}
+
 		return toolError(
 			"No endpoint found for %s %s. "+
 				"Use list_endpoints to see available endpoints.",
@@ -301,6 +310,229 @@ func (s *Server) handleGetEndpoint(
 
 	if entry.DegradedRequestSchema != "" {
 		result["degraded_request_reason"] = entry.DegradedRequestSchema
+	}
+
+	return toolJSON(result), nil, nil
+}
+
+// registerManageState registers the manage_state tool with the MCP server.
+func (s *Server) registerManageState() {
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name: "manage_state",
+		Description: "Manage stateful resources via the running Mimikos " +
+			"server (stateful mode only). Actions: list, get, create, update, delete, reset.",
+	}, s.handleManageState)
+}
+
+// httpMethodForAction returns the HTTP method for a manage_state action.
+//
+// The "update" action maps to PUT. Mimikos does not distinguish PUT from PATCH
+// — the router's handleUpdate does a shallow merge of the request body onto
+// the stored resource regardless of HTTP method. PUT is the canonical choice
+// because the classifier names the behavior "update", not "put" or "patch".
+func httpMethodForAction(action string) (string, bool) {
+	switch action {
+	case "list", "get":
+		return http.MethodGet, true
+	case "create":
+		return http.MethodPost, true
+	case "update":
+		return http.MethodPut, true
+	case "delete":
+		return http.MethodDelete, true
+	default:
+		return "", false
+	}
+}
+
+// handleManageState delegates state management to the HTTP handler via
+// httptest, reusing all validation, identity extraction, and error handling.
+func (s *Server) handleManageState(
+	_ context.Context,
+	_ *mcp.CallToolRequest,
+	args manageStateArgs,
+) (*mcp.CallToolResult, any, error) {
+	if !s.instance.IsRunning() {
+		return toolError(
+			"No Mimikos server is running. Call start_server first.",
+		), nil, nil
+	}
+
+	if s.instance.Mode() != model.ModeStateful {
+		return toolError(
+			"manage_state requires stateful mode. Current mode: %s. "+
+				"Restart with mode \"stateful\".",
+			string(s.instance.Mode()),
+		), nil, nil
+	}
+
+	action := strings.ToLower(args.Action)
+
+	// Handle reset separately — no HTTP equivalent.
+	if action == "reset" {
+		store := s.instance.Store()
+		if store != nil {
+			store.Reset()
+		}
+
+		return toolJSON(map[string]any{"reset": true}), nil, nil
+	}
+
+	// Validate action.
+	httpMethod, ok := httpMethodForAction(action)
+	if !ok {
+		return toolError(
+			"Unknown action: %q. Must be one of: list, get, create, update, delete, reset.",
+			args.Action,
+		), nil, nil
+	}
+
+	// Validate path is provided for non-reset actions.
+	if args.Path == "" {
+		return toolError(
+			"\"path\" is required for action %q. Example: /pets or /pets/123.",
+			action,
+		), nil, nil
+	}
+
+	// Validate body for create and update.
+	if (action == "create" || action == "update") && len(args.Body) == 0 {
+		return toolError(
+			"\"body\" is required for action %q. "+
+				"Provide the resource fields as a JSON object.",
+			action,
+		), nil, nil
+	}
+
+	// Build the HTTP request.
+	var bodyReader *bytes.Reader
+
+	if args.Body != nil {
+		bodyBytes, err := json.Marshal(args.Body)
+		if err != nil {
+			return toolError("cannot marshal body: %s", err), nil, nil
+		}
+
+		bodyReader = bytes.NewReader(bodyBytes)
+	} else {
+		bodyReader = bytes.NewReader(nil)
+	}
+
+	req := httptest.NewRequest(httpMethod, args.Path, bodyReader)
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+
+	// Delegate to the router handler.
+	handler := s.instance.Handler()
+	if handler == nil {
+		return toolError(
+			"No Mimikos server is running. Call start_server first.",
+		), nil, nil
+	}
+
+	handler.ServeHTTP(rec, req)
+
+	// Parse the response body as JSON so the agent receives a structured
+	// object instead of a double-encoded JSON string.
+	var body any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		body = rec.Body.String()
+	}
+
+	result := map[string]any{
+		"status_code": rec.Code,
+		"body":        body,
+	}
+
+	return toolJSON(result), nil, nil
+}
+
+// registerRequestStatus registers the request_status tool with the MCP server.
+func (s *Server) registerRequestStatus() {
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name: "request_status",
+		Description: "Force a specific HTTP status code for the next " +
+			"request to an endpoint (one-shot override).",
+	}, s.handleRequestStatus)
+}
+
+// handleRequestStatus sets a one-shot status code override. The path must be a
+// concrete URL path (e.g., /pets/42), not a route pattern — the middleware
+// matches overrides against the actual request URL.
+func (s *Server) handleRequestStatus(
+	_ context.Context,
+	_ *mcp.CallToolRequest,
+	args requestStatusArgs,
+) (*mcp.CallToolResult, any, error) {
+	overrides := s.instance.Overrides()
+	if overrides == nil {
+		return toolError(
+			"No Mimikos server is running. Call start_server first.",
+		), nil, nil
+	}
+
+	method := strings.ToUpper(args.Method)
+
+	overrides.Set(method, args.Path, args.StatusCode)
+
+	result := map[string]any{
+		"set":         true,
+		"method":      method,
+		"path":        args.Path,
+		"status_code": args.StatusCode,
+	}
+
+	return toolJSON(result), nil, nil
+}
+
+// registerGetRequestLog registers the get_request_log tool with the MCP server.
+func (s *Server) registerGetRequestLog() {
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name: "get_request_log",
+		Description: "Get recent HTTP requests and their status codes " +
+			"from the running Mimikos server.",
+	}, s.handleGetRequestLog)
+}
+
+// handleGetRequestLog returns recent entries from the request log.
+func (s *Server) handleGetRequestLog(
+	_ context.Context,
+	_ *mcp.CallToolRequest,
+	args getRequestLogArgs,
+) (*mcp.CallToolResult, any, error) {
+	reqLog := s.instance.ReqLog()
+	if reqLog == nil {
+		return toolError(
+			"No Mimikos server is running. Call start_server first.",
+		), nil, nil
+	}
+
+	limit := args.Limit
+	if limit <= 0 {
+		limit = defaultRequestLogLimit
+	}
+
+	entries := reqLog.Recent(limit)
+
+	type logEntry struct {
+		Method           string   `json:"method"`
+		Path             string   `json:"path"`
+		StatusCode       int      `json:"statusCode"`
+		Timestamp        string   `json:"timestamp"`
+		ValidationErrors []string `json:"validationErrors,omitempty"`
+	}
+
+	result := make([]logEntry, 0, len(entries))
+
+	for _, e := range entries {
+		result = append(result, logEntry{
+			Method:           e.Method,
+			Path:             e.Path,
+			StatusCode:       e.StatusCode,
+			Timestamp:        e.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
+			ValidationErrors: e.ValidationErrors,
+		})
 	}
 
 	return toolJSON(result), nil, nil
