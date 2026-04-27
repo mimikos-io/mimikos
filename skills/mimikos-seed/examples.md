@@ -1,6 +1,7 @@
 # Seeding Examples
 
-Two concrete examples showing the full seeding workflow. Exact response values are
+Two concrete examples showing the full seeding workflow. Examples use MCP tool calls
+as the primary transport, with curl equivalents noted. Exact response values are
 deterministic but may differ across Mimikos versions.
 
 ---
@@ -19,22 +20,23 @@ Key schemas to note:
 
 ### Seeding Steps
 
-**1. Check startup output** — no warnings, all endpoints healthy:
+**1. Check server status and discover endpoints:**
 
 ```
-🎭 mimikos v0.3.4
-Spec: Petstore 3.1 (OpenAPI 3.1.0)
-Operations: 5 endpoints classified
+server_status()
+→ {"running": true, "port": 8080, "mode": "stateful", "spec_title": "Petstore 3.1", ...}
 
-  METHOD PATH          BEHAVIOR CONFIDENCE
-  GET    /pets         → list     high
-  POST   /pets         → create   high
-  GET    /pets/{petId} → fetch    high
-  DELETE /pets/{petId} → delete   high
-  PATCH  /pets/{petId} → update   high
-
-Listening on :8080 (stateful mode, strict=false)
+list_endpoints()
+→ [
+    {"method": "GET",    "path": "/pets",         "behavior": "list",   "confidence": "high"},
+    {"method": "POST",   "path": "/pets",         "behavior": "create", "confidence": "high"},
+    {"method": "GET",    "path": "/pets/{petId}",  "behavior": "fetch",  "confidence": "high"},
+    {"method": "DELETE", "path": "/pets/{petId}",  "behavior": "delete", "confidence": "high"},
+    {"method": "PATCH",  "path": "/pets/{petId}",  "behavior": "update", "confidence": "high"}
+  ]
 ```
+
+No warnings, all endpoints healthy.
 
 **2. Identify create endpoints** — `POST /pets` (behavior: create).
 
@@ -44,25 +46,25 @@ Listening on :8080 (stateful mode, strict=false)
 
 **5. Send create requests:**
 
-```bash
-# Create first pet
-curl -s -X POST http://localhost:8080/pets \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Buddy", "tag": "dog"}'
+```
+manage_state(action: "create", path: "/pets", body: {"name": "Buddy", "tag": "dog"})
 ```
 
-Response (201 Created):
+Response:
 
 ```json
 {
-  "id": 6635,
-  "metadata": {},
-  "name": "Buddy",
-  "status": {
-    "reason": "jDKAKpGL",
-    "type": "archived"
-  },
-  "tag": "dog"
+  "status_code": 201,
+  "body": {
+    "id": 6635,
+    "metadata": {},
+    "name": "Buddy",
+    "status": {
+      "reason": "jDKAKpGL",
+      "type": "archived"
+    },
+    "tag": "dog"
+  }
 }
 ```
 
@@ -70,25 +72,25 @@ Note: the response contains `"name": "Buddy"` and `"tag": "dog"` from your reque
 Fields you didn't send (`id`, `metadata`, `status`) are generated from the schema. The
 `id` (6635) is server-generated and unique per create. Store it.
 
-```bash
-# Create second pet
-curl -s -X POST http://localhost:8080/pets \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Luna", "tag": "cat"}'
+```
+manage_state(action: "create", path: "/pets", body: {"name": "Luna", "tag": "cat"})
 ```
 
-Response (201 Created):
+Response:
 
 ```json
 {
-  "id": 2085,
-  "metadata": {},
-  "name": "Luna",
-  "status": {
-    "since": "XNMhKMTw",
-    "type": "active"
-  },
-  "tag": "cat"
+  "status_code": 201,
+  "body": {
+    "id": 2085,
+    "metadata": {},
+    "name": "Luna",
+    "status": {
+      "since": "XNMhKMTw",
+      "type": "active"
+    },
+    "tag": "cat"
+  }
 }
 ```
 
@@ -96,30 +98,32 @@ Both pets have the names and tags we sent. IDs are unique and server-generated.
 
 **6. Verify:**
 
-```bash
-# List all pets
-curl -s http://localhost:8080/pets
+```
+manage_state(action: "list", path: "/pets")
 ```
 
-Response (200 OK):
+Response:
 
 ```json
-[
-  {
-    "id": 2085,
-    "metadata": {},
-    "name": "Luna",
-    "status": { "since": "XNMhKMTw", "type": "active" },
-    "tag": "cat"
-  },
-  {
-    "id": 6635,
-    "metadata": {},
-    "name": "Buddy",
-    "status": { "reason": "jDKAKpGL", "type": "archived" },
-    "tag": "dog"
-  }
-]
+{
+  "status_code": 200,
+  "body": [
+    {
+      "id": 2085,
+      "metadata": {},
+      "name": "Luna",
+      "status": { "since": "XNMhKMTw", "type": "active" },
+      "tag": "cat"
+    },
+    {
+      "id": 6635,
+      "metadata": {},
+      "name": "Buddy",
+      "status": { "reason": "jDKAKpGL", "type": "archived" },
+      "tag": "dog"
+    }
+  ]
+}
 ```
 
 Two pets in the store with the names and tags we sent. The list response is a bare JSON
@@ -148,8 +152,21 @@ Mimikos uses instead of faker — so the generated data looks realistic.
 
 ### Seeding Steps
 
-**1. Check startup output** — confirm no warnings. Asana has 167 endpoints; look for
-create behaviors in the banner.
+**1. Discover endpoints:**
+
+```
+list_endpoints()
+→ [...167 endpoints...]
+```
+
+Filter for `"behavior": "create"` to find seedable endpoints.
+
+For wrapper key details:
+
+```
+get_endpoint(method: "POST", path: "/projects")
+→ {"wrapper_key": "data", "id_field_hint": "gid", ...}
+```
 
 **2. Identify create endpoints:**
 
@@ -173,31 +190,30 @@ not assume nested paths have POST endpoints.
 
 **5. Send create requests:**
 
-```bash
-# Create a project — note the wrapped request body
-curl -s -X POST http://localhost:8080/projects \
-  -H "Content-Type: application/json" \
-  -d '{"data": {"name": "Website Redesign"}}'
+```
+manage_state(action: "create", path: "/projects", body: {"data": {"name": "Website Redesign"}})
 ```
 
-Response (201 Created) — truncated, actual response is much larger:
+Response (truncated — actual response is much larger):
 
 ```json
 {
-  "data": {
-    "gid": "12345",
-    "name": "Website Redesign",
-    "resource_type": "task",
-    "archived": false,
-    "color": "light-purple",
-    "created_at": "2026-02-13T11:09:50Z",
-    "notes": "These are things we need to purchase.",
-    "owner": {
+  "status_code": 201,
+  "body": {
+    "data": {
       "gid": "12345",
-      "name": "Greg Sanchez",
-      "resource_type": "task"
-    },
-    "...": "... (many more fields — Asana schemas are large)"
+      "name": "Website Redesign",
+      "resource_type": "task",
+      "archived": false,
+      "color": "light-purple",
+      "created_at": "2026-02-13T11:09:50Z",
+      "notes": "These are things we need to purchase.",
+      "owner": {
+        "gid": "12345",
+        "name": "Greg Sanchez",
+        "resource_type": "task"
+      }
+    }
   }
 }
 ```
@@ -207,35 +223,33 @@ Note: the `name` is `"Website Redesign"` — your request body value. Other fiel
 The merge pipeline is: faker → spec examples → request body (last wins).
 
 The `gid` inside the wrapper is the server-generated ID (protected from example overwrite
-to keep IDs unique). Store it: `response.data.gid` = `"12345"`.
+to keep IDs unique). Store it: `body.data.gid` = `"12345"`.
 
 **6. Verify:**
 
-```bash
-# List projects — response is wrapped in {data: [...]}
-curl -s http://localhost:8080/projects
+```
+manage_state(action: "list", path: "/projects")
 ```
 
-Response (200 OK):
+Response:
 
 ```json
 {
-  "data": [
-    {
-      "gid": "12345",
-      "name": "Website Redesign",
-      "resource_type": "task"
-    }
-  ]
+  "status_code": 200,
+  "body": {
+    "data": [
+      {
+        "gid": "12345",
+        "name": "Website Redesign",
+        "resource_type": "task"
+      }
+    ]
+  }
 }
 ```
 
-One project in the store. The list response is wrapped: `response.data` is an array.
+One project in the store. The list response is wrapped: `body.data` is an array.
 
-```bash
-# List tasks for the project — uses the nested path
-curl -s http://localhost:8080/projects/12345/tasks
-```
-
-Note: `/projects/{id}/tasks` and `/tasks` are separate namespaces. This endpoint only
-returns tasks created via `POST /projects/{id}/tasks`, not tasks created via `POST /tasks`.
+Note: `/projects/{id}/tasks` and `/tasks` are separate namespaces. The nested list
+endpoint only returns tasks created via `POST /projects/{id}/tasks`, not tasks created
+via `POST /tasks`.

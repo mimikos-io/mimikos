@@ -205,6 +205,65 @@ See the full [feature coverage matrix](testdata/README.md) for what each endpoin
 
 ---
 
+## MCP Server (AI Agent Integration)
+
+Mimikos includes a built-in [MCP](https://modelcontextprotocol.io/) server that lets AI agents start mock servers,
+query endpoints, manage stateful resources, and inspect request logs — all through tool calls.
+
+**Quick setup** (Claude Code):
+
+```bash
+claude mcp add mimikos -- mimikos mcp
+```
+
+Restart Claude Code to pick up the new server. To share the config with your team, add `-s project` which creates a
+`.mcp.json` in the project root.
+
+**Cursor:** Add to `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "mimikos": {
+      "type": "stdio",
+      "command": "mimikos",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+**Available tools:**
+
+| Tool              | Description                                           |
+|-------------------|-------------------------------------------------------|
+| `start_server`    | Start a mock server from an OpenAPI spec              |
+| `stop_server`     | Stop the running mock server                          |
+| `server_status`   | Check if a server is running and get its details      |
+| `list_endpoints`  | List all classified endpoints                         |
+| `get_endpoint`    | Get detailed info about a specific endpoint           |
+| `manage_state`    | CRUD operations on stateful resources (stateful mode) |
+| `request_status`  | Force a specific status code for the next request     |
+| `get_request_log` | View recent HTTP requests and their status codes      |
+
+**Example workflow** (what an agent does behind the scenes):
+
+```
+Agent: start_server(specPath: "./petstore.yaml", mode: "stateful")
+→ Server running on :8080, 5 endpoints classified
+
+Agent: list_endpoints()
+→ GET /pets (list), POST /pets (create), GET /pets/{petId} (fetch), ...
+
+Agent: manage_state(action: "create", path: "/pets", body: {"name": "Buddy"})
+→ 201, {"id": 7, "name": "Buddy", ...}
+
+Agent: manage_state(action: "get", path: "/pets/7")
+→ 200, {"id": 7, "name": "Buddy", ...}
+```
+
+---
+
 ## AI Agent Skills
 
 Mimikos ships two AI agent skills for Claude Code and Cursor — one improves your spec, the other populates your mock
@@ -238,7 +297,10 @@ Setup and usage: [skills/mimikos-seed/](skills/mimikos-seed/README.md)
 
 ```
 mimikos start [flags] <spec-path>
+mimikos mcp [flags]
 ```
+
+**Start flags:**
 
 | Flag              | Description                                          | Default         |
 |-------------------|------------------------------------------------------|-----------------|
@@ -246,8 +308,14 @@ mimikos start [flags] <spec-path>
 | `--mode`          | Operating mode: `deterministic`, `stateful`          | `deterministic` |
 | `--max-resources` | Max stored resources in stateful mode (LRU eviction) | `10000`         |
 | `--strict`        | Return 500 if generated response fails validation    | `false`         |
-| `--max-depth`     | Max depth for nested/circular schemas                | `3`             |
+| `--max-depth`     | Max depth for nested/circular schemas                | `10`            |
 | `--log-level`     | Logging verbosity (debug, info, warn, error)         | `info`          |
+
+**MCP flags:**
+
+| Flag          | Description                                  | Default |
+|---------------|----------------------------------------------|---------|
+| `--log-level` | Logging verbosity (debug, info, warn, error) | `info`  |
 
 **Request an error response:**
 

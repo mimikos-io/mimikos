@@ -311,6 +311,40 @@ func TestInstance_Start_PopulatesBehaviorMap(t *testing.T) {
 	assert.True(t, ok, "should find GET /pets/{petId}")
 }
 
+// --- Rapid start/stop cycling (edge case) ---
+
+func TestInstance_RapidStartStopCycling(t *testing.T) {
+	if testing.Short() {
+		t.Skip("binds TCP ports")
+	}
+
+	inst := &Instance{}
+	specBytes := loadPetstoreSpec(t)
+
+	// Rapidly cycle start → stop 5 times. Each cycle should succeed with
+	// no leaked goroutines, stuck locks, or port binding failures.
+	for i := range 5 {
+		port := freePort(t)
+
+		err := inst.Start(context.Background(), StartConfig{
+			SpecPath:  "petstore-3.0.yaml",
+			SpecBytes: specBytes,
+			Port:      port,
+		})
+		require.NoError(t, err, "start cycle %d should succeed", i)
+		assert.True(t, inst.IsRunning(), "should be running after start cycle %d", i)
+
+		err = inst.Stop(context.Background())
+		require.NoError(t, err, "stop cycle %d should succeed", i)
+		assert.False(t, inst.IsRunning(), "should be stopped after stop cycle %d", i)
+
+		// Verify state is fully cleared after each stop.
+		assert.Nil(t, inst.Handler(), "handler should be nil after stop cycle %d", i)
+		assert.Nil(t, inst.Endpoints(), "endpoints should be nil after stop cycle %d", i)
+		assert.Nil(t, inst.Store(), "store should be nil after stop cycle %d", i)
+	}
+}
+
 // --- Stop clears state ---
 
 func TestInstance_Stop_ClearsState(t *testing.T) {

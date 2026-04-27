@@ -1,0 +1,8 @@
+openapi: "3.0.3"
+info:
+  title: No Operations API
+  version: "1.0.0"
+  description: >
+    A valid OpenAPI spec with no paths defined. Used to test edge case
+    handling when a spec has zero operations.
+paths: {}

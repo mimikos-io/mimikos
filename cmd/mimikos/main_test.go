@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/mimikos-io/mimikos/internal/model"
 	"github.com/mimikos-io/mimikos/internal/server"
@@ -71,6 +72,51 @@ func TestRun_MCP_Dispatches(t *testing.T) {
 	// with the right error, not "unknown command".
 	code := run([]string{"mcp", "--log-level", "invalid"}, os.Stderr)
 	assert.Equal(t, 1, code, "invalid log level should fail with exit 1")
+}
+
+func TestRun_MCPHelp(t *testing.T) {
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+
+	code := run([]string{"mcp", "--help"}, w)
+	require.NoError(t, w.Close())
+
+	assert.Equal(t, 0, code, "mcp --help should exit 0")
+
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	output := string(buf[:n])
+
+	// Should describe what MCP mode does.
+	assert.Contains(t, output, "MCP",
+		"help should mention MCP")
+	assert.Contains(t, output, "AI agent",
+		"help should mention AI agents")
+	// Go's flag package uses single-dash format: -log-level.
+	assert.Contains(t, output, "-log-level",
+		"help should list the log-level flag")
+}
+
+func TestRun_StartHelp(t *testing.T) {
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+
+	code := run([]string{"start", "--help"}, w)
+	require.NoError(t, w.Close())
+
+	assert.Equal(t, 0, code, "start --help should exit 0")
+
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	output := string(buf[:n])
+
+	// Go's flag package uses single-dash format: -port, -mode.
+	assert.Contains(t, output, "-port",
+		"help should list the port flag")
+	assert.Contains(t, output, "-mode",
+		"help should list the mode flag")
+	assert.Contains(t, output, "spec-path",
+		"help should mention spec-path argument")
 }
 
 func TestRun_UnknownCommand(t *testing.T) {
@@ -151,27 +197,28 @@ func TestRun_StartInvalidMaxDepth(t *testing.T) {
 func TestParseStartFlags_ModeDefault(t *testing.T) {
 	specPath := filepath.Join(testdataDir(t), "petstore-3.0.yaml")
 
-	cfg := parseStartFlags([]string{specPath}, os.Stderr)
+	result := parseStartFlags([]string{specPath}, os.Stderr)
 
-	require.NotNil(t, cfg)
-	assert.Equal(t, "deterministic", cfg.mode.String())
+	require.NotNil(t, result.config)
+	assert.Equal(t, "deterministic", result.config.mode.String())
 }
 
 func TestParseStartFlags_ModeStateful(t *testing.T) {
 	specPath := filepath.Join(testdataDir(t), "petstore-3.0.yaml")
 
-	cfg := parseStartFlags([]string{"--mode", "stateful", specPath}, os.Stderr)
+	result := parseStartFlags([]string{"--mode", "stateful", specPath}, os.Stderr)
 
-	require.NotNil(t, cfg)
-	assert.Equal(t, "stateful", cfg.mode.String())
+	require.NotNil(t, result.config)
+	assert.Equal(t, "stateful", result.config.mode.String())
 }
 
 func TestParseStartFlags_ModeInvalid(t *testing.T) {
 	specPath := filepath.Join(testdataDir(t), "petstore-3.0.yaml")
 
-	cfg := parseStartFlags([]string{"--mode", "invalid", specPath}, os.Stderr)
+	result := parseStartFlags([]string{"--mode", "invalid", specPath}, os.Stderr)
 
-	assert.Nil(t, cfg, "invalid mode should reject config")
+	assert.Nil(t, result.config, "invalid mode should reject config")
+	assert.Equal(t, 1, result.exitCode)
 }
 
 func TestParseStartFlags_ModeCaseSensitive(t *testing.T) {
@@ -188,8 +235,8 @@ func TestParseStartFlags_ModeCaseSensitive(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := parseStartFlags([]string{"--mode", tt.mode, specPath}, os.Stderr)
-			assert.Nil(t, cfg, "case-variant %q should be rejected", tt.mode)
+			result := parseStartFlags([]string{"--mode", tt.mode, specPath}, os.Stderr)
+			assert.Nil(t, result.config, "case-variant %q should be rejected", tt.mode)
 		})
 	}
 }
@@ -197,19 +244,19 @@ func TestParseStartFlags_ModeCaseSensitive(t *testing.T) {
 func TestParseStartFlags_MaxResourcesDefault(t *testing.T) {
 	specPath := filepath.Join(testdataDir(t), "petstore-3.0.yaml")
 
-	cfg := parseStartFlags([]string{specPath}, os.Stderr)
+	result := parseStartFlags([]string{specPath}, os.Stderr)
 
-	require.NotNil(t, cfg)
-	assert.Equal(t, 10_000, cfg.maxResources)
+	require.NotNil(t, result.config)
+	assert.Equal(t, 10_000, result.config.maxResources)
 }
 
 func TestParseStartFlags_MaxResourcesCustom(t *testing.T) {
 	specPath := filepath.Join(testdataDir(t), "petstore-3.0.yaml")
 
-	cfg := parseStartFlags([]string{"--max-resources", "500", specPath}, os.Stderr)
+	result := parseStartFlags([]string{"--max-resources", "500", specPath}, os.Stderr)
 
-	require.NotNil(t, cfg)
-	assert.Equal(t, 500, cfg.maxResources)
+	require.NotNil(t, result.config)
+	assert.Equal(t, 500, result.config.maxResources)
 }
 
 func TestParseStartFlags_MaxResourcesInvalid(t *testing.T) {
@@ -225,10 +272,109 @@ func TestParseStartFlags_MaxResourcesInvalid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := parseStartFlags([]string{"--max-resources", tt.value, specPath}, os.Stderr)
-			assert.Nil(t, cfg)
+			result := parseStartFlags([]string{"--max-resources", tt.value, specPath}, os.Stderr)
+			assert.Nil(t, result.config)
 		})
 	}
+}
+
+// --- Version check notification tests (50.5) ---
+
+func TestPrintUpdateNotification_ImmediateResult(t *testing.T) {
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+
+	// Channel already has a result.
+	ch := make(chan *updateResult, 1)
+	ch <- &updateResult{
+		CurrentVersion:  "0.3.0",
+		LatestVersion:   "v0.4.0",
+		UpdateAvailable: true,
+	}
+
+	printUpdateNotification(w, ch)
+	require.NoError(t, w.Close())
+
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	output := string(buf[:n])
+
+	assert.Contains(t, output, "v0.3.0", "should show current version")
+	assert.Contains(t, output, "v0.4.0", "should show latest version")
+	assert.Contains(t, output, "Update available", "should show update message")
+}
+
+func TestPrintUpdateNotification_DelayedResult(t *testing.T) {
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+
+	// Channel produces a result after a short delay — well within the
+	// 500ms updateGracePeriod so the bounded wait picks it up.
+	ch := make(chan *updateResult, 1)
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+
+		ch <- &updateResult{
+			CurrentVersion:  "0.3.0",
+			LatestVersion:   "v0.5.0",
+			UpdateAvailable: true,
+		}
+	}()
+
+	printUpdateNotification(w, ch)
+	require.NoError(t, w.Close())
+
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	output := string(buf[:n])
+
+	assert.Contains(t, output, "v0.5.0",
+		"delayed result within grace period should still print")
+}
+
+func TestPrintUpdateNotification_TimeoutSkips(t *testing.T) {
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+
+	// Channel never produces a result within the grace period.
+	ch := make(chan *updateResult) // unbuffered, never sent to
+
+	start := time.Now()
+
+	printUpdateNotification(w, ch)
+
+	elapsed := time.Since(start)
+
+	require.NoError(t, w.Close())
+
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	output := string(buf[:n])
+
+	assert.Empty(t, output, "should print nothing when check times out")
+	assert.GreaterOrEqual(t, elapsed, updateGracePeriod/2,
+		"should wait a meaningful fraction of the grace period before giving up")
+	assert.Less(t, elapsed, 2*time.Second,
+		"should not block far beyond the grace period")
+}
+
+func TestPrintUpdateNotification_NilResult(t *testing.T) {
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+
+	// Channel has nil result (no update available).
+	ch := make(chan *updateResult, 1)
+	ch <- nil
+
+	printUpdateNotification(w, ch)
+	require.NoError(t, w.Close())
+
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	output := string(buf[:n])
+
+	assert.Empty(t, output, "nil result should print nothing")
 }
 
 // --- Startup banner tests (22.4) ---
