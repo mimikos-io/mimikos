@@ -4,18 +4,33 @@ An AI agent skill that teaches Claude Code and Cursor agents how to seed a runni
 [Mimikos](https://github.com/mimikos-io/mimikos) mock server in stateful mode.
 
 Instead of manually constructing curl commands and reading schemas, the agent reads your
-OpenAPI spec, constructs valid request bodies, sends POST requests, and verifies the
-seeded state — turning a 10-minute manual task into a 30-second automated one.
+OpenAPI spec, constructs valid request bodies, and creates resources via MCP tool calls —
+turning a 10-minute manual task into a 30-second automated one.
 
 ## What It Does
 
-1. Reads your OpenAPI spec to discover create endpoints and their request schemas
-2. Determines dependency order (parent resources before children)
-3. Constructs valid JSON request bodies with realistic values
-4. Sends POST requests to a running Mimikos instance
-5. Extracts generated IDs from responses
-6. Optionally updates resources with specific values via PATCH/PUT
-7. Verifies the seeded state via GET/LIST endpoints
+1. Checks server status via MCP (or discovers a running instance)
+2. Reads your OpenAPI spec to discover create endpoints and their request schemas
+3. Determines dependency order (parent resources before children)
+4. Constructs valid JSON request bodies with realistic values
+5. Creates resources via `manage_state` MCP tool calls
+6. Extracts generated IDs from responses
+7. Verifies the seeded state via list/get operations
+
+## Transport
+
+The skill uses **MCP tool calls** as the primary transport when the Mimikos MCP server
+is configured. If MCP is not available, it falls back to **curl** commands against the
+running server.
+
+| Operation        | MCP tool                                    | Curl fallback                     |
+|------------------|---------------------------------------------|-----------------------------------|
+| Check status     | `server_status()`                           | `pgrep -af mimikos`              |
+| Start server     | `start_server(specPath, mode: "stateful")`  | `mimikos start --mode stateful`  |
+| List endpoints   | `list_endpoints()`                          | Read startup banner              |
+| Create resource  | `manage_state(action: "create", ...)`       | `curl -X POST ...`              |
+| Verify state     | `manage_state(action: "list", ...)`         | `curl -s http://...`            |
+| Reset state      | `manage_state(action: "reset")`             | Restart server                   |
 
 ## Files
 
@@ -44,6 +59,14 @@ Copy the `mimikos-seed/` directory into your project's skills directory:
 └── examples.md
 ```
 
+For best results, also configure the Mimikos MCP server:
+
+```bash
+claude mcp add mimikos -- mimikos mcp
+```
+
+Restart Claude Code to pick up the new server.
+
 Then in Claude Code, invoke it with:
 
 ```
@@ -62,11 +85,25 @@ Cursor uses `.cursor/rules/` with `.mdc` files. Concatenate `SKILL.md` and
 .cursor/rules/mimikos-seed.mdc
 ```
 
+Also configure the MCP server in `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "mimikos": {
+      "type": "stdio",
+      "command": "mimikos",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
 ## Prerequisites
 
 - Mimikos installed (see [Installation](https://github.com/mimikos-io/mimikos#installation))
-- Mimikos running in stateful mode: `mimikos start --mode stateful <spec-file>`
 - An OpenAPI 3.x spec file accessible to the agent
+- (Recommended) Mimikos MCP server configured for your editor
 
 ## Usage
 

@@ -2,7 +2,7 @@
 name: mimikos-seed
 description: >-
   Seed a running Mimikos mock server in stateful mode by reading an OpenAPI spec,
-  constructing valid request bodies, and sending POST requests to populate resources.
+  constructing valid request bodies, and creating resources via MCP tools.
   Use when the user wants to populate mock data, seed a mock server, or set up test
   data for Mimikos.
 ---
@@ -11,7 +11,7 @@ description: >-
 
 Seed a running Mimikos instance in stateful mode so that GET and LIST endpoints return
 realistic data. You will read the OpenAPI spec, construct valid request bodies, and
-send HTTP requests to create resources.
+create resources via MCP tool calls (or HTTP requests as a fallback).
 
 ## When to Use
 
@@ -21,8 +21,16 @@ send HTTP requests to create resources.
 
 ## Prerequisites
 
-Before seeding, you must ensure Mimikos is running in stateful mode. Follow this
-sequence:
+Before seeding, you must ensure Mimikos is running in stateful mode.
+
+### Determine Transport
+
+**MCP tools (preferred):** If the Mimikos MCP server is configured, use MCP tool calls
+for all operations. MCP tools return structured JSON — no curl parsing needed.
+
+**HTTP fallback:** If MCP tools are not available (agent has no MCP connection to
+Mimikos), use `curl` commands against the running server. All MCP operations have curl
+equivalents documented in the fallback sections below.
 
 ### 1. Locate the OpenAPI Spec File
 
@@ -32,21 +40,34 @@ or `"openapi"` at the top level).
 
 ### 2. Check if Mimikos Is Already Running
 
-Run `pgrep -af mimikos` (or equivalent) to inspect running Mimikos processes. The
-output shows the full command line, including mode, port, and spec file:
+**Via MCP:**
 
 ```
-12345 mimikos start --mode stateful --port 8080 petstore.yaml
+server_status()
 ```
 
-**If Mimikos is running in stateful mode** — use it. Extract the port and spec path
-from the process arguments. Proceed to the seeding workflow.
+This returns `{"running": true, "mode": "stateful", "port": 8080, ...}` or
+`{"running": false}`.
 
-**If Mimikos is running in deterministic mode** — inform the user:
+**Fallback:** Run `pgrep -af mimikos` to inspect running processes. The output shows
+the full command line, including mode, port, and spec file.
+
+**If running in stateful mode** — use it. Proceed to the seeding workflow.
+
+**If running in deterministic mode** — inform the user:
 "Mimikos is running in deterministic mode. Seeding requires stateful mode. Should I
-restart it in stateful mode?" Do NOT kill the process without explicit user permission.
+restart it in stateful mode?" Do NOT stop the server without explicit user permission.
 
-**If Mimikos is not running** — start it:
+**If not running** — start it:
+
+Via MCP:
+
+```
+start_server(specPath: "<spec-file>", mode: "stateful")
+```
+
+Fallback:
+
 ```bash
 mimikos start --mode stateful <spec-file>
 ```
@@ -56,25 +77,19 @@ Non-strict is the right default for seeding because strict mode returns 500 if a
 generated response fails schema validation, which can block seeding on specs with minor
 schema inconsistencies.
 
-If the user requests strict mode:
-```bash
-mimikos start --mode stateful --strict <spec-file>
-```
-
 ### 3. Confirm the Port
 
-Default port is 8080. If a custom port is in use, note it from the process arguments
-or the startup banner:
-```
-Listening on :9090 (stateful mode, strict=false)
-```
+Via MCP: the `start_server` response or `server_status` response includes the port.
+
+Fallback: default port is 8080. Check the startup banner or process arguments for a
+custom port.
 
 ## How Stateful Create Works
 
 You must understand this before sending requests:
 
-- **Create responses merge your request body onto generated defaults.** When you POST
-  `{"name": "Buddy"}`, the response WILL contain `"name": "Buddy"`. Fields you send
+- **Create responses merge your request body onto generated defaults.** When you create
+  with `{"name": "Buddy"}`, the response WILL contain `"name": "Buddy"`. Fields you send
   override generated values. Fields you don't send are filled from the schema.
 
 - **The merge pipeline has three layers (last wins):**
@@ -100,43 +115,53 @@ Follow these steps in order:
 Ask the user: **"Do you want me to seed all create endpoints, or specific ones?"**
 
 - If the user names specific resources or endpoints, seed only those.
-- If the user says "all" or doesn't specify, seed every endpoint classified as `create`
-  in the startup banner.
+- If the user says "all" or doesn't specify, seed every endpoint classified as `create`.
 
-### Step 2: Read the Startup Output
+### Step 2: Discover Endpoints
 
-Check the Mimikos startup output for warnings. Two signals matter:
-
-**Failed endpoints** — these always return 500. Do not attempt to seed them:
+**Via MCP:**
 
 ```
-⚠ 2 endpoint(s) failed to register:
-    POST /broken-endpoint
-    GET /other-broken
+list_endpoints()
 ```
+
+Returns all classified endpoints with their behavior type and confidence. Identify
+endpoints with `"behavior": "create"`.
+
+For detailed info on a specific endpoint:
+
+```
+get_endpoint(method: "POST", path: "/pets")
+```
+
+This tells you whether the endpoint has a request schema, response schema, examples,
+wrapper keys, and whether it's degraded.
+
+**Fallback:** Check the Mimikos startup output for the endpoint table and any warnings.
+
+### Step 3: Check for Warnings
+
+Two signals matter:
+
+**Failed endpoints** — these always return 500. Do not attempt to seed them.
 
 **Degraded schemas** — these have schemas that failed to compile:
-
-```
-⚠ 3 endpoint(s) have degraded schemas:
-    POST /some-endpoint
-    ...
-```
 
 - In stateful mode, degraded **create** endpoints always return 500 (they need the
   response schema to generate the resource to store). Skip them.
 - In strict mode (`strict=true`), degraded endpoints with request bodies also return
-    500. Skip any body-bearing method on a degraded endpoint in strict mode.
+  500. Skip any body-bearing method on a degraded endpoint in strict mode.
+
+Via MCP: `get_endpoint` returns `"degraded": true` for degraded endpoints.
 
 If there are no warnings, all endpoints are healthy.
 
-### Step 3: Read the OpenAPI Spec
+### Step 4: Read the OpenAPI Spec
 
 Open and read the spec file. You need to identify:
 
 1. **Create endpoints** — look for `POST` operations that return `201` or `200` with a
-   response body. The startup banner also shows behaviors (`create`, `list`, `fetch`,
-   etc.) which you can cross-reference.
+   response body. Cross-reference with the behaviors from `list_endpoints`.
 
 2. **Request body schemas** — for each create endpoint, follow the path:
    ```
@@ -149,7 +174,7 @@ Open and read the spec file. You need to identify:
    paths.<path>.post.responses["201"].content["application/json"].schema
    ```
 
-### Step 4: Determine Seeding Order
+### Step 5: Determine Seeding Order
 
 Seed parent resources before child resources. Use path nesting as the heuristic:
 
@@ -167,7 +192,7 @@ Seed parent resources before child resources. Use path nesting as the heuristic:
 - If two paths have the same depth, order doesn't matter
 - Parameterless collection paths (`/pets`) come before parameterized item paths
 
-### Step 5: Construct Request Bodies
+### Step 6: Construct Request Bodies
 
 For each create endpoint, build a valid JSON body from the request schema:
 
@@ -198,7 +223,7 @@ identity extraction.
 - `address`, `city`, `country` → realistic location data
 - `createdAt`, `updatedAt` → ISO 8601 timestamps
 
-### Step 6: Handle Common Patterns
+### Step 7: Handle Common Patterns
 
 **Wrapper keys (e.g., Asana, Notion):**
 Some APIs wrap request bodies in an envelope like `{"data": {...}}`. You will see this
@@ -220,23 +245,40 @@ value is the actual resource schema. Match the spec:
 }
 ```
 
+Via MCP: `get_endpoint` returns `"wrapper_key"` if the endpoint uses a wrapper.
+
 **Nested resources:**
 When creating a child resource (e.g., `POST /pets/{petId}/vaccinations`), use a real ID
-from a previously created parent resource in the URL path:
-
-```
-POST http://localhost:8080/pets/8423671/vaccinations
-```
-
-The `8423671` must be the actual ID returned when you created the pet.
+from a previously created parent resource in the URL path.
 
 **Multiple resource types:**
 Seed each resource type independently. Resources are stored by type — creating a pet
 does not affect the projects store.
 
-### Step 7: Send Create Requests
+### Step 8: Send Create Requests
 
-For each create endpoint, send a POST request:
+**Via MCP:**
+
+```
+manage_state(action: "create", path: "/pets", body: {"name": "Buddy", "tag": "dog"})
+```
+
+Response:
+
+```json
+{
+  "status_code": 201,
+  "body": {
+    "id": 6635,
+    "name": "Buddy",
+    "tag": "dog",
+    "status": {"type": "archived", "reason": "jDKAKpGL"},
+    "metadata": {}
+  }
+}
+```
+
+**Fallback:**
 
 ```bash
 curl -s -X POST http://localhost:<port><path> \
@@ -255,27 +297,32 @@ curl -s -X POST http://localhost:<port><path> \
 If the API uses wrapper keys, the ID is inside the wrapper:
 
 ```json
-// Flat response: ID is at response.id
+// Flat response: ID is at body.id
 {
   "id": "abc123",
-  "name": "Generated Name",
-  ...
+  "name": "Generated Name"
 }
 
-// Wrapped response: ID is at response.data.gid
+// Wrapped response: ID is at body.data.gid
 {
   "data": {
     "gid": "abc123",
-    "name": "Generated Name",
-    ...
+    "name": "Generated Name"
   }
 }
 ```
 
-### Step 8: Optionally Update After Creation
+### Step 9: Optionally Update After Creation
 
-If you need to change field values after creation (e.g., the user requests a correction),
-use PATCH/PUT:
+If you need to change field values after creation, use the update action:
+
+**Via MCP:**
+
+```
+manage_state(action: "update", path: "/pets/6635", body: {"name": "New Name"})
+```
+
+**Fallback:**
 
 ```bash
 curl -s -X PATCH http://localhost:<port><path>/<id> \
@@ -284,32 +331,34 @@ curl -s -X PATCH http://localhost:<port><path>/<id> \
 ```
 
 The update handler shallow-merges your fields onto the stored resource. But in most cases,
-you should send the desired values directly in the POST body (Step 7) — they will appear
+you should send the desired values directly in the create body (Step 8) — they will appear
 in the create response.
 
-For wrapped APIs, wrap the update body too:
+For wrapped APIs, wrap the update body too.
 
-```bash
-curl -s -X PATCH http://localhost:<port>/projects/<gid> \
-  -H "Content-Type: application/json" \
-  -d '{"data": {"name": "New Name"}}'
-```
-
-### Step 9: Verify
+### Step 10: Verify
 
 After seeding all resource types, verify the state:
 
-1. **List endpoints** — call GET on collection paths and confirm resources exist:
-   ```bash
-   curl -s http://localhost:<port>/pets
-   ```
+**Via MCP:**
 
-2. **Fetch endpoints** — spot-check individual resources using stored IDs:
-   ```bash
-   curl -s http://localhost:<port>/pets/<id>
-   ```
+```
+manage_state(action: "list", path: "/pets")
+manage_state(action: "get", path: "/pets/6635")
+```
 
-3. **Count** — verify the number of resources matches what you created.
+**Fallback:**
+
+```bash
+curl -s http://localhost:<port>/pets
+curl -s http://localhost:<port>/pets/6635
+```
+
+Check:
+
+1. **List endpoints** — confirm resources exist and count matches
+2. **Fetch endpoints** — spot-check individual resources using stored IDs
+3. **Count** — verify the number of resources matches what you created
 
 Report the results to the user: which resources were created, their IDs, and any
 failures.
@@ -322,14 +371,14 @@ failures.
 | 400     | Request validation failed | Fix the request body — check required fields, types, constraints. The response body lists which fields failed. |
 | 404     | Path not found            | Check the URL path matches the spec exactly                                                                    |
 | 405     | Method not allowed        | Check the HTTP method — this path may not support POST                                                         |
-| 415     | Wrong content type        | Add `-H "Content-Type: application/json"`                                                                      |
+| 415     | Wrong content type        | Add `-H "Content-Type: application/json"` (curl only — MCP tools set this automatically)                      |
 | 422     | Validation error          | Similar to 400 — fix request body                                                                              |
 | 500     | Server error              | Likely a degraded or failed endpoint. Check startup output. Do not retry — this endpoint cannot be seeded.     |
 
 ## Important Constraints
 
-- **Content-Type header is required.** Always send `Content-Type: application/json` with
-  POST/PUT/PATCH requests. Mimikos returns 415 without it.
+- **Content-Type header is required for HTTP.** Always send `Content-Type: application/json`
+  with POST/PUT/PATCH requests via curl. MCP's `manage_state` tool sets this automatically.
 
 - **Request body size limit is 10MB.** This is unlikely to be hit during seeding.
 
@@ -342,9 +391,13 @@ failures.
   `GET /projects/1/tasks`, not under `GET /projects/2/tasks`. Use the correct endpoint and
   parent IDs for the scope you need.
 
-- **Do not send `X-Mimikos-Status` when seeding.** This header bypasses stateful mode
-  entirely — no resource will be stored and the response comes from the deterministic
+- **Do not use `request_status` when seeding.** The status override header bypasses stateful
+  mode entirely — no resource will be stored and the response comes from the deterministic
   generator instead.
 
-- **Default capacity is 10,000 resources.** Configurable via `--max-resources`. LRU
-  eviction applies when capacity is reached.
+- **Default capacity is 10,000 resources.** Configurable via `--max-resources` (CLI) or
+  the `start_server` MCP tool. LRU eviction applies when capacity is reached.
+
+- **Reset state if needed.** To clear all resources and start fresh:
+  Via MCP: `manage_state(action: "reset")`
+  Via curl: restart the server.

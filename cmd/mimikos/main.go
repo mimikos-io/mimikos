@@ -62,6 +62,11 @@ const (
 	// updateCheckTimeout is the maximum time to wait for the GitHub Releases
 	// API when checking for a newer version at startup.
 	updateCheckTimeout = 2 * time.Second
+
+	// updateGracePeriod is the maximum time to wait for the update check to
+	// complete after the startup banner has printed. This ensures the update
+	// notification reliably appears without meaningfully delaying startup.
+	updateGracePeriod = 500 * time.Millisecond
 )
 
 func main() {
@@ -120,9 +125,16 @@ type startConfig struct {
 	mode         model.OperatingMode
 }
 
+// startFlagResult carries the outcome of flag parsing. A nil config means
+// either an error or --help was requested. ExitCode distinguishes the two.
+type startFlagResult struct {
+	config   *startConfig
+	exitCode int
+}
+
 // parseStartFlags parses and validates CLI flags for the "start" subcommand.
-// Returns nil config and prints errors on validation failure.
-func parseStartFlags(args []string, out *os.File) *startConfig {
+// Returns nil config with exit code 0 for --help, exit code 1 for errors.
+func parseStartFlags(args []string, out *os.File) *startFlagResult {
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
 	fs.SetOutput(out)
 
@@ -133,9 +145,24 @@ func parseStartFlags(args []string, out *os.File) *startConfig {
 	logLevel := fs.String("log-level", "info", "logging verbosity (debug, info, warn, error)")
 	modeStr := fs.String("mode", "deterministic", "operating mode (deterministic, stateful)")
 
+	// Override default usage to include description and spec-path argument.
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(out, "Start a Mimikos mock server from an OpenAPI spec.")
+		_, _ = fmt.Fprintln(out)
+		_, _ = fmt.Fprintln(out, "Usage: mimikos start [flags] <spec-path>")
+		_, _ = fmt.Fprintln(out)
+		_, _ = fmt.Fprintln(out, "Flags:")
+
+		fs.PrintDefaults()
+	}
+
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return &startFlagResult{exitCode: 0}
+		}
+
 		// flag.ContinueOnError: Parse already printed the error + usage.
-		return nil
+		return &startFlagResult{exitCode: 1}
 	}
 
 	if fs.NArg() == 0 {
@@ -143,58 +170,62 @@ func parseStartFlags(args []string, out *os.File) *startConfig {
 		_, _ = fmt.Fprintln(out)
 		_, _ = fmt.Fprintln(out, "usage: mimikos start [flags] <spec-path>")
 
-		return nil
+		return &startFlagResult{exitCode: 1}
 	}
 
 	level, err := parseLogLevel(*logLevel)
 	if err != nil {
 		_, _ = fmt.Fprintf(out, "error: %s\n", err)
 
-		return nil
+		return &startFlagResult{exitCode: 1}
 	}
 
 	mode, err := model.ParseOperatingMode(*modeStr)
 	if err != nil {
 		_, _ = fmt.Fprintf(out, "error: %s\n", err)
 
-		return nil
+		return &startFlagResult{exitCode: 1}
 	}
 
 	if *port < 1 || *port > maxPort {
 		_, _ = fmt.Fprintf(out, "error: invalid port %d (must be 1-65535)\n", *port)
 
-		return nil
+		return &startFlagResult{exitCode: 1}
 	}
 
 	if *maxDepth < 1 {
 		_, _ = fmt.Fprintf(out, "error: --max-depth must be at least 1\n")
 
-		return nil
+		return &startFlagResult{exitCode: 1}
 	}
 
 	if *maxResources < 1 {
 		_, _ = fmt.Fprintf(out, "error: --max-resources must be at least 1\n")
 
-		return nil
+		return &startFlagResult{exitCode: 1}
 	}
 
-	return &startConfig{
-		specPath:     fs.Arg(0),
-		port:         *port,
-		strict:       *strict,
-		maxDepth:     *maxDepth,
-		maxResources: *maxResources,
-		level:        level,
-		mode:         mode,
+	return &startFlagResult{
+		config: &startConfig{
+			specPath:     fs.Arg(0),
+			port:         *port,
+			strict:       *strict,
+			maxDepth:     *maxDepth,
+			maxResources: *maxResources,
+			level:        level,
+			mode:         mode,
+		},
 	}
 }
 
 // runStart implements the "start" subcommand.
 func runStart(args []string, out *os.File) int {
-	cfg := parseStartFlags(args, out)
-	if cfg == nil {
-		return 1
+	flagResult := parseStartFlags(args, out)
+	if flagResult.config == nil {
+		return flagResult.exitCode
 	}
+
+	cfg := flagResult.config
 
 	logger := slog.New(slog.NewTextHandler(out, &slog.HandlerOptions{Level: cfg.level}))
 
@@ -305,7 +336,26 @@ func runMCP(args []string, out *os.File) int {
 
 	logLevel := fs.String("log-level", "info", "logging verbosity (debug, info, warn, error)")
 
+	// Override default usage to describe the MCP subcommand.
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(out, "Start Mimikos as an MCP server for AI agent integration.")
+		_, _ = fmt.Fprintln(out)
+		_, _ = fmt.Fprintln(out, "Usage: mimikos mcp [flags]")
+		_, _ = fmt.Fprintln(out)
+		_, _ = fmt.Fprintln(out, "The MCP server communicates over stdio and exposes tools for")
+		_, _ = fmt.Fprintln(out, "starting mock servers, querying endpoints, managing stateful")
+		_, _ = fmt.Fprintln(out, "resources, and inspecting request logs.")
+		_, _ = fmt.Fprintln(out)
+		_, _ = fmt.Fprintln(out, "Flags:")
+
+		fs.PrintDefaults()
+	}
+
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+
 		return 1
 	}
 
@@ -406,17 +456,18 @@ func startUpdateCheck() <-chan *updateResult {
 	return ch
 }
 
-// printUpdateNotification does a non-blocking read on the update channel
-// and prints a notification if a newer version is available. If the check
-// is still in flight, it silently moves on — never blocks startup.
+// printUpdateNotification waits up to updateGracePeriod for the update check
+// to complete and prints a notification if a newer version is available. The
+// bounded wait ensures the notification reliably appears after the startup
+// banner without meaningfully delaying startup.
 func printUpdateNotification(out *os.File, ch <-chan *updateResult) {
 	select {
 	case r := <-ch:
 		if r != nil && r.UpdateAvailable {
 			_, _ = fmt.Fprint(out, formatUpdateNotification(r.CurrentVersion, r.LatestVersion))
 		}
-	default:
-		// Check still in flight — don't block startup.
+	case <-time.After(updateGracePeriod):
+		// Check still in flight after grace period — don't block startup.
 	}
 }
 
@@ -438,7 +489,7 @@ func printUsage(out *os.File) {
 	_, _ = fmt.Fprintln(out, "  --port           Server port (default: 8080)")
 	_, _ = fmt.Fprintln(out, "  --mode           Operating mode: deterministic, stateful (default: deterministic)")
 	_, _ = fmt.Fprintln(out, "  --strict         Return 500 if response fails schema validation (default: false)")
-	_, _ = fmt.Fprintln(out, "  --max-depth      Max recursion depth for circular schemas (default: 3)")
+	_, _ = fmt.Fprintln(out, "  --max-depth      Max recursion depth for circular schemas (default: 10)")
 	_, _ = fmt.Fprintln(out, "  --max-resources  Max stored resources in stateful mode (default: 10000)")
 	_, _ = fmt.Fprintln(out, "  --log-level      Logging verbosity: debug, info, warn, error (default: info)")
 	_, _ = fmt.Fprintln(out)

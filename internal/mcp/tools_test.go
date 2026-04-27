@@ -987,3 +987,115 @@ func TestGetRequestLog_NotRunning(t *testing.T) {
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "No Mimikos server is running")
 }
+
+// --- Edge case tests (Task 50.1) ---
+
+// noOpsSpecPath returns the path to a valid OpenAPI spec with zero operations.
+func noOpsSpecPath(t *testing.T) string {
+	t.Helper()
+
+	return filepath.Join(testdataDir(t), "specs", "e2e-no-operations.yaml")
+}
+
+func TestStartServer_EmptySpecFile(t *testing.T) {
+	// An empty (0-byte) spec file should return an actionable error.
+	emptyFile := filepath.Join(t.TempDir(), "empty.yaml")
+	require.NoError(t, os.WriteFile(emptyFile, []byte{}, 0o644))
+
+	session := setupMCPSession(t)
+
+	result := callTool(t, session, "start_server", map[string]any{
+		"specPath": emptyFile,
+		"port":     freePort(t),
+	})
+
+	assert.True(t, result.IsError, "empty spec file should be an error")
+
+	text := resultText(t, result)
+	assert.Contains(t, text, "cannot start server",
+		"error should explain what happened")
+}
+
+func TestStartServer_ZeroOperations(t *testing.T) {
+	if testing.Short() {
+		t.Skip("binds a TCP port")
+	}
+
+	// A valid OpenAPI spec with paths: {} should start successfully but
+	// report 0 operations. This is not an error — it's a valid (if useless)
+	// spec.
+	session, srv := setupMCPSessionWithServer(t)
+
+	result := callTool(t, session, "start_server", map[string]any{
+		"specPath": noOpsSpecPath(t),
+		"port":     freePort(t),
+	})
+
+	assert.False(t, result.IsError,
+		"zero-ops spec should succeed: %s", resultText(t, result))
+
+	data := resultJSON(t, result)
+	assert.InDelta(t, 0.0, data["operations"], 0.1,
+		"should report 0 operations")
+	assert.Equal(t, "No Operations API", data["spec_title"])
+
+	endpoints, ok := data["endpoints"].([]any)
+	require.True(t, ok, "endpoints should be an array")
+	assert.Empty(t, endpoints, "should have no endpoints")
+
+	assert.True(t, srv.instance.IsRunning(),
+		"server should still be running")
+}
+
+func TestManageState_UpdateMissingBody(t *testing.T) {
+	if testing.Short() {
+		t.Skip("binds a TCP port")
+	}
+
+	session, _ := setupMCPSessionWithServer(t)
+	startStatefulServer(t, session)
+
+	result := callTool(t, session, "manage_state", map[string]any{
+		"action": "update",
+		"path":   "/pets/42",
+		// no body — required for update
+	})
+
+	assert.True(t, result.IsError,
+		"update without body should be an error")
+
+	text := resultText(t, result)
+	assert.Contains(t, text, "body",
+		"error should mention missing body")
+	assert.Contains(t, text, "update",
+		"error should mention the action")
+}
+
+func TestGetEndpoint_ValidMethodWrongPathFormat(t *testing.T) {
+	if testing.Short() {
+		t.Skip("binds a TCP port")
+	}
+
+	session, _ := setupMCPSessionWithServer(t)
+
+	result := callTool(t, session, "start_server", map[string]any{
+		"specPath": petstoreSpecPath(t),
+		"port":     freePort(t),
+	})
+	require.False(t, result.IsError)
+
+	// Valid method (GET exists in spec) but a path that doesn't match any
+	// route pattern. The error should guide the user to list_endpoints.
+	result = callTool(t, session, "get_endpoint", map[string]any{
+		"method": "GET",
+		"path":   "pets",
+	})
+
+	assert.True(t, result.IsError)
+
+	text := resultText(t, result)
+	assert.Contains(t, text, "No endpoint found",
+		"error should say no endpoint found")
+	assert.Contains(t, text, "list_endpoints",
+		"error should guide user to list_endpoints")
+}

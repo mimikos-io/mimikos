@@ -319,7 +319,7 @@ func (inst *Instance) Mode() model.OperatingMode {
 // Store returns the state store of the running server. Returns nil if no server
 // is running or the server is in deterministic mode.
 //
-//nolint:ireturn // Store is an interface by design — callers need Reset().
+//nolint:ireturn // Store is an interface — callers need Reset().
 func (inst *Instance) Store() state.Store {
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
