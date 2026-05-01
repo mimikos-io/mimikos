@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-04-27
+
+### Added
+
+#### MCP Server (AI Agent Integration)
+- Built-in [MCP](https://modelcontextprotocol.io/) server (`mimikos mcp`) that lets AI agents control Mimikos through tool calls over stdio
+- 8 tools available: `start_server`, `stop_server`, `server_status`, `list_endpoints`, `get_endpoint`, `manage_state`, `request_status`, `get_request_log`
+- Single-instance model: one MCP process manages one mock server — start, query, mutate state, and inspect request logs without leaving the agent's tool-call flow
+- `manage_state` supports full CRUD: create, get, list, update, delete, and reset — all delegated through the real HTTP handler with validation
+- `request_status` sets a one-shot status code override for the next request to a specific path
+- `get_request_log` returns recent requests (method, path, status, timestamp) with configurable limit
+- Works with Claude Code (`claude mcp add mimikos -- mimikos mcp`) and Cursor (`.cursor/mcp.json`)
+
+#### AI Agent Seeding Skill (MCP-first)
+- Seeding skill (`skills/mimikos-seed/`) rewritten to use MCP tools as primary transport with curl fallback
+- Agents now discover endpoints via `list_endpoints()`, create resources via `manage_state()`, and verify via `server_status()` — no curl parsing required
+
+#### CLI Improvements
+- `mimikos mcp [flags]` subcommand with `--log-level` flag
+- `mimikos start --help` and `mimikos mcp --help` now exit with code 0 (was 1)
+- Custom help text for both subcommands with descriptions and usage examples
+
+### Changed
+
+#### Version Check Reliability
+- Startup version check now uses a 500ms bounded wait after the banner prints, ensuring the update notification reliably appears instead of being silently dropped when startup completes faster than the GitHub API roundtrip
+
+### Fixed
+
+#### `--max-depth` Documentation
+- Fixed `printUsage()` and README showing `--max-depth` default as 3 when the actual CLI default is 10 (the generator's internal fallback of 3 is not user-facing)
+
 ## [0.3.9] - 2026-04-19
 
 ### Fixed
