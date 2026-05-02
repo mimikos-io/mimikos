@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-05-02
+
+### Fixed
+
+#### Verbose Logging for Circular Schemas
+- A single `GET /pets` request on a spec with circular `$ref` (e.g., `Category → parent → Category`) produced 2,176 WARN lines (884KB of console output) — now produces at most 3
+- Depth-limit warnings are deduplicated: each unique schema is warned about once per server lifetime, not once per field per recursion path
+- Response validation warnings are summarized into a single bounded line with a sample violation (path + got/want), total violation count, and actionable fix guidance — instead of dumping every nested path
+- Log messages are now self-contained for two audiences: the user sees a non-alarmist explanation ("null fields due to circular schema references"), the spec engineer sees the exact error and how to fix it
+
 ## [0.4.0] - 2026-04-27
 
 ### Added

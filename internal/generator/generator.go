@@ -84,9 +84,11 @@ type (
 	// All outputs are deterministic: identical schemas with identical seeds
 	// always produce identical data structures.
 	DataGenerator struct {
-		primitive *PrimitiveGenerator
-		maxDepth  int
-		logger    *slog.Logger
+		primitive      *PrimitiveGenerator
+		maxDepth       int
+		logger         *slog.Logger
+		depthWarned    map[string]bool // schemas already warned about depth-limit (warn-once-ever)
+		circularWarned map[string]bool // schemas already warned about circular recursion
 	}
 
 	// discardHandler is a slog.Handler that discards all log output.
@@ -111,9 +113,11 @@ func NewDataGenerator(semantic *SemanticMapper, maxDepth int, logger *slog.Logge
 	}
 
 	return &DataGenerator{
-		primitive: NewPrimitiveGenerator(semantic),
-		maxDepth:  maxDepth,
-		logger:    logger,
+		primitive:      NewPrimitiveGenerator(semantic),
+		maxDepth:       maxDepth,
+		logger:         logger,
+		depthWarned:    make(map[string]bool),
+		circularWarned: make(map[string]bool),
 	}
 }
 
@@ -129,7 +133,7 @@ func (g *DataGenerator) Generate(schema *jsonschema.Schema, seed int64) (any, er
 // dispatch, threading depth for structural termination and recurse for
 // absolute stack-overflow protection.
 //
-//nolint:cyclop
+//nolint:cyclop,gocognit // Type dispatch + depth guards + polymorphism in one function.
 func (g *DataGenerator) generate(
 	schema *jsonschema.Schema, seed int64, fieldName string, depth int, recurse int,
 ) (any, error) {
@@ -142,7 +146,10 @@ func (g *DataGenerator) generate(
 	// Logged at Warn because hitting this limit signals a likely spec defect
 	// (purely circular composition chain), not normal depth management.
 	if recurse >= maxRecursion {
-		g.logger.Warn(warnCircularSchema, "field", fieldName, "recurse", recurse, "schema", schemaID(schema))
+		if id := schemaID(schema); !g.circularWarned[id] {
+			g.circularWarned[id] = true
+			g.logger.Warn(warnCircularSchema, "field", fieldName, "recurse", recurse, "schema", id)
+		}
 
 		return nil, nil //nolint:nilnil // recursion limit termination
 	}
@@ -187,9 +194,12 @@ func (g *DataGenerator) generate(
 		}
 
 		if depth >= g.maxDepth {
-			g.logger.Warn(warnDepthObject,
-				"field", fieldName, "depth", depth, "maxDepth", g.maxDepth,
-				"schema", schemaID(schema))
+			if id := schemaID(schema); !g.depthWarned[id] {
+				g.depthWarned[id] = true
+				g.logger.Warn(warnDepthObject,
+					"field", fieldName, "depth", depth, "maxDepth", g.maxDepth,
+					"schema", id)
+			}
 
 			return nil, nil //nolint:nilnil // depth termination — nil is the documented sentinel
 		}
@@ -203,9 +213,12 @@ func (g *DataGenerator) generate(
 		}
 
 		if depth >= g.maxDepth {
-			g.logger.Warn(warnDepthArray,
-				"field", fieldName, "depth", depth, "maxDepth", g.maxDepth,
-				"schema", schemaID(schema))
+			if id := schemaID(schema); !g.depthWarned[id] {
+				g.depthWarned[id] = true
+				g.logger.Warn(warnDepthArray,
+					"field", fieldName, "depth", depth, "maxDepth", g.maxDepth,
+					"schema", id)
+			}
 
 			return []any{}, nil // depth termination — empty array
 		}

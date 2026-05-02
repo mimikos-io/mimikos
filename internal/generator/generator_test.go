@@ -1,12 +1,50 @@
 package generator
 
 import (
+	"context"
+	"log/slog"
+	"sync"
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// captureHandler is a slog.Handler that records all log records for assertions.
+type captureHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.records = append(h.records, r)
+
+	return nil
+}
+
+func (h *captureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *captureHandler) WithGroup(string) slog.Handler      { return h }
+
+func (h *captureHandler) warnCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	n := 0
+
+	for _, r := range h.records {
+		if r.Level == slog.LevelWarn {
+			n++
+		}
+	}
+
+	return n
+}
 
 // --- Object generation tests (8.4.3) ---
 
@@ -1691,4 +1729,112 @@ func TestGenerateObjectExampleDeterministic(t *testing.T) {
 	val2, err2 := g.Generate(schema, 100)
 	require.NoError(t, err2)
 	assert.Equal(t, val1, val2, "object example should be deterministic")
+}
+
+// --- Depth-limit log deduplication tests (Task 52) ---
+
+// TestDepthWarningDeduplication verifies that a circular schema that would
+// trigger thousands of depth-limit warnings only logs once per unique schema.
+func TestDepthWarningDeduplication(t *testing.T) {
+	t.Parallel()
+
+	handler := &captureHandler{}
+	logger := slog.New(handler)
+
+	// maxDepth=3 so the circular schema recurses multiple times before
+	// hitting the limit — without deduplication this fires many warnings.
+	g := NewDataGenerator(nil, 3, logger)
+
+	// Circular schema: Category has "parent" (Category) and "children" ([]Category).
+	// At depth 3 with self-referencing $ref, this triggers depth-limit warnings
+	// for both the object (parent) and array (children) many times.
+	category := &jsonschema.Schema{
+		Types:    newTypes("object"),
+		Location: "https://example.com/spec.yaml#/components/schemas/Category",
+	}
+	category.Properties = map[string]*jsonschema.Schema{
+		"name":     {Types: newTypes("string")},
+		"parent":   {Ref: category},
+		"children": {Types: newTypes("array"), Items2020: &jsonschema.Schema{Ref: category}},
+	}
+
+	_, err := g.Generate(category, 42)
+	require.NoError(t, err)
+
+	// Without deduplication this would produce 11+ WARN lines (one per field
+	// per recursion path). With deduplication: at most 1 per unique schema ID.
+	// This schema has 2 unique IDs at depth limit: Category (object) and anonymous (array).
+	warnCount := handler.warnCount()
+	assert.LessOrEqual(t, warnCount, 2,
+		"depth warnings should be deduplicated per schema; got %d WARN logs (was 11 before fix)", warnCount)
+}
+
+// TestDepthWarningDifferentSchemasStillWarn verifies that deduplication is
+// per-schema — two different schemas at depth limit each get their own warning.
+func TestDepthWarningDifferentSchemasStillWarn(t *testing.T) {
+	t.Parallel()
+
+	handler := &captureHandler{}
+	logger := slog.New(handler)
+
+	g := NewDataGenerator(nil, 1, logger)
+
+	// Two distinct nested schemas — each should warn once.
+	schema := objectSchema(map[string]*jsonschema.Schema{
+		"alpha": {
+			Types:    newTypes("object"),
+			Location: "https://example.com/spec.yaml#/components/schemas/Alpha",
+			Properties: map[string]*jsonschema.Schema{
+				"deep": {Types: newTypes("string")},
+			},
+		},
+		"beta": {
+			Types:    newTypes("object"),
+			Location: "https://example.com/spec.yaml#/components/schemas/Beta",
+			Properties: map[string]*jsonschema.Schema{
+				"deep": {Types: newTypes("string")},
+			},
+		},
+	})
+
+	_, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+
+	// Each unique schema should warn exactly once.
+	warnCount := handler.warnCount()
+	assert.Equal(t, 2, warnCount,
+		"each unique schema at depth limit should warn once; got %d", warnCount)
+}
+
+// TestDepthWarningResetsBetweenGenerateCalls verifies that the deduplication
+// state resets between Generate() calls, so the user sees the warning again
+// if they restart or call a different endpoint.
+func TestDepthWarningResetsBetweenGenerateCalls(t *testing.T) {
+	t.Parallel()
+
+	handler := &captureHandler{}
+	logger := slog.New(handler)
+
+	g := NewDataGenerator(nil, 1, logger)
+
+	schema := objectSchema(map[string]*jsonschema.Schema{
+		"nested": {
+			Types:    newTypes("object"),
+			Location: "https://example.com/spec.yaml#/components/schemas/Nested",
+			Properties: map[string]*jsonschema.Schema{
+				"inner": {Types: newTypes("string")},
+			},
+		},
+	})
+
+	// First call — should warn.
+	_, err := g.Generate(schema, 42)
+	require.NoError(t, err)
+	assert.Equal(t, 1, handler.warnCount())
+
+	// Second call — should NOT warn again (same schema, same generator instance).
+	_, err = g.Generate(schema, 99)
+	require.NoError(t, err)
+	assert.Equal(t, 1, handler.warnCount(),
+		"second Generate call should not re-warn for same schema")
 }
