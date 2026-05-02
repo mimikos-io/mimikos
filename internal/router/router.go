@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/mimikos-io/mimikos/internal/builder"
 	merrors "github.com/mimikos-io/mimikos/internal/errors"
@@ -433,16 +434,27 @@ func (h *Handler) generateResponseBody(
 	}
 
 	if valErr := scenario.Schema.Validate(responseBody); valErr != nil {
+		var verr *jsonschema.ValidationError
+
 		if h.strict {
-			writeProblem(w, http.StatusInternalServerError,
-				"response validation failed: "+valErr.Error())
+			detail := "response validation failed: " + valErr.Error()
+			if errors.As(valErr, &verr) {
+				detail = "response validation failed: " + summarizeValidationError(verr)
+			}
+
+			writeProblem(w, http.StatusInternalServerError, detail)
 
 			return nil, false
 		}
 
-		h.logger.Warn("generated response does not match schema",
+		summary := valErr.Error()
+		if errors.As(valErr, &verr) {
+			summary = summarizeValidationError(verr)
+		}
+
+		h.logger.Warn("response contains null fields due to circular schema references",
 			"schema", scenario.Schema.Name,
-			"error", valErr.Error(),
+			"summary", summary,
 		)
 	}
 
